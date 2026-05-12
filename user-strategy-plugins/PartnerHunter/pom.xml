@@ -16,7 +16,7 @@
     <version>1.0.0</version>
 
     <name>partner-hunter-strategy</name>
-    <description>伙伴猎卡组策略插件</description>
+    <description>伙伴猎卡组策略插件-v2</description>
 
     <repositories>
         <repository>
@@ -40,6 +40,7 @@
 
         <strategy-sdk-version>${hs-script-strategy-sdk-version}</strategy-sdk-version>
         <card-sdk-version>${hs-script-card-sdk-version}</card-sdk-version>
+        <base-strategy-plugin-version>${hs-script-base-strategy-plugin-version}</base-strategy-plugin-version>
     </properties>
 
     <build>
@@ -94,6 +95,11 @@
             <groupId>com.github.xjw580</groupId>
             <artifactId>hs-script-card-sdk</artifactId>
             <version>${card-sdk-version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.github.xjw580</groupId>
+            <artifactId>hs-script-base-strategy-plugin</artifactId>
+            <version>${base-strategy-plugin-version}</version>
         </dependency>
     </dependencies>
 </project>
