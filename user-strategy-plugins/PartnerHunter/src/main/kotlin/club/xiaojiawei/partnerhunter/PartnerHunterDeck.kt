@@ -49,12 +49,12 @@ private val KNOWN_CARD_MAP: Map<String, KnownCardInfo> = mapOf(
         cardType = CardTypeEnum.MINION, atc = 4, health = 4,
         cardRace = CardRaceEnum.PET, isBattlecry = true, bonus = 10.0,
         isUpgradeCompanion = true),
-    "MEND_303" to KnownCardInfo(  // 迁徙的雷象 3费3/4 野兽
+    "MEND_303" to KnownCardInfo(  // 迁徙的雷象 3费3/4 野兽 升级伙伴
         cardType = CardTypeEnum.MINION, atc = 3, health = 4,
-        cardRace = CardRaceEnum.PET, bonus = 4.0),
-    "MEND_301" to KnownCardInfo(  // 灵语猎手 4费2/2
+        cardRace = CardRaceEnum.PET, bonus = 4.0, isUpgradeCompanion = true),
+    "MEND_301" to KnownCardInfo(  // 灵语猎手 4费2/2 升级伙伴
         cardType = CardTypeEnum.MINION, atc = 2, health = 2,
-        cardRace = CardRaceEnum.PET, bonus = 2.0),
+        cardRace = CardRaceEnum.PET, bonus = 2.0, isUpgradeCompanion = true),
     "MEND_300" to KnownCardInfo(  // 驯服宠物 2费
         cardType = CardTypeEnum.SPELL, bonus = 4.0, isUpgradeCompanion = true),
     "MEND_305" to KnownCardInfo(  // 滋养自然 2费
@@ -108,6 +108,11 @@ private val KNOWN_CARD_MAP: Map<String, KnownCardInfo> = mapOf(
     "FIR_953" to KnownCardInfo(  // 熔岩猎犬 5费5/8 野兽 突袭
         cardType = CardTypeEnum.MINION, atc = 5, health = 8,
         cardRace = CardRaceEnum.PET, isRush = true),
+    "CORE_AT_123" to KnownCardInfo(  // 冰喉 7费6/6 龙 嘲讽
+        cardType = CardTypeEnum.MINION, atc = 6, health = 6,
+        cardRace = CardRaceEnum.DRAGON, isTaunt = true),
+    "EDR_102t" to KnownCardInfo(  // 黑暗之赐 法术token
+        cardType = CardTypeEnum.SPELL, bonus = 1.0),
     // --- 动物伙伴相关 ---
     "CORE_OG_211" to KnownCardInfo(  // 兽群呼唤 9费 召唤全部三个动物伙伴
         cardType = CardTypeEnum.SPELL, bonus = 10.0, needsSpace = 3),
@@ -220,8 +225,14 @@ class PartnerHunterDeck : DeckStrategy() {
         val myMinionCount = me.playArea.cards.count { it.cardType == CardTypeEnum.MINION }
         log.info { "=== ${me.usableResource}费 手牌${me.handArea.cards.size} 敌${enemyMinions.size}个(攻${enemyAtk}) ===" }
 
-        // 2.5 场面空间预清（4+随从时先送小怪腾格子）
-        if (myMinionCount >= 4) {
+        // 2.1 斩杀检测：优先于所有清场逻辑
+        val hasLethal = checkLethal(me, rival)
+        val nearLethal = isNearLethal(me, rival)
+        if (hasLethal) log.info { "检测到可斩杀，跳过所有清场" }
+        else if (nearLethal) log.info { "接近斩杀(场攻≥HP70%)，跳过小怪解场" }
+
+        // 2.5 场面空间预清（非斩杀时才清场）
+        if (!hasLethal && !nearLethal && myMinionCount >= 4) {
             preClearForSpace(me, enemyMinions)
         }
 
@@ -255,7 +266,7 @@ class PartnerHunterDeck : DeckStrategy() {
                 val cFmt = "%.1f".format(cScore)
                 log.info { "硬币 得分${cFmt}" }
                 coin.action.power()
-                Thread.sleep((600..900).random().toLong())
+                Thread.sleep((100..180).random().toLong())
                 finalCards = cCards
             }
         }
@@ -278,8 +289,8 @@ class PartnerHunterDeck : DeckStrategy() {
                     val known = KNOWN_CARD_MAP[c.cardId]
                     val myMinionCnt = me.playArea.cards.count { it.cardType == CardTypeEnum.MINION }
                     val needSpace = known?.needsSpace ?: (if (c.cardType == CardTypeEnum.MINION) 1 else 0)
-                    if (myMinionCnt + needSpace > 7) {
-                        // 格子不够：尝试预清低价值随从
+                    if (myMinionCnt + needSpace > 7 && !hasLethal && !nearLethal) {
+                        // 格子不够：尝试预清低价值随从（斩杀/叫杀时跳过）
                         preClearForSpace(me, enemyMinions)
                     }
                     if (c.cardType === CardTypeEnum.SPELL || c.cardType === CardTypeEnum.HERO) {
@@ -293,7 +304,7 @@ class PartnerHunterDeck : DeckStrategy() {
                     }
                     used += c.actualCost(me, enemyMinions)
                     // 速度优化：首张牌稍慢(模拟思考)，后续加快
-                    Thread.sleep(if (firstAction) (600..900).random().toLong() else (200..400).random().toLong())
+                    Thread.sleep(if (firstAction) (100..180).random().toLong() else (80..150).random().toLong())
                     firstAction = false
                 }
             }
@@ -302,17 +313,13 @@ class PartnerHunterDeck : DeckStrategy() {
             log.info { "DP未选中牌" }
         }
 
-        // 7. 主动解场
-        val hasLethal = checkLethal(me, rival)
-        val nearLethal = isNearLethal(me, rival)
-        if (hasLethal) {
-            log.info { "检测到可斩杀，跳过主动解场" }
-        } else if (nearLethal) {
-            log.info { "接近斩杀(场攻≥HP70%)，跳过小怪解场" }
-            // 仅解高威胁随从(ATK≥5)，保留打脸场攻
-            clearHighThreatsOnly()
-        } else {
-            activeClear()
+        // 7. 主动解场（hasLethal/nearLethal已在步骤2.1计算）
+        if (!hasLethal) {
+            if (nearLethal) {
+                clearHighThreatsOnly()
+            } else {
+                activeClear()
+            }
         }
 
         // 8. cleanPlay收尾
@@ -333,15 +340,16 @@ class PartnerHunterDeck : DeckStrategy() {
                     if (c.cardType === CardTypeEnum.SPELL || c.cardType === CardTypeEnum.HERO) {
                         c.action.autoPower(CARD_DATA_TRIE[c.cardId])
                     } else if (!me.playArea.isFull) {
-                        // 接近满场前预清低价值随从
-                        if (me.playArea.cards.count { it.cardType == CardTypeEnum.MINION } >= 5) {
+                        // 接近满场前预清低价值随从（斩杀/叫杀时跳过）
+                        if (!hasLethal && !nearLethal &&
+                            me.playArea.cards.count { it.cardType == CardTypeEnum.MINION } >= 5) {
                             preClearForSpace(me, enemyMinions)
                         }
                         if (!me.playArea.isFull) {
                             c.action.autoPower(CARD_DATA_TRIE[c.cardId])
                         }
                     }
-                    Thread.sleep((150..300).random().toLong())
+                    Thread.sleep((80..150).random().toLong())
                 }
             }
         }
@@ -361,7 +369,7 @@ class PartnerHunterDeck : DeckStrategy() {
                 if (!has || me.usableResource >= p.cost + 3) {
                     log.info { "英雄技能" }
                     p.action.power()
-                    Thread.sleep((500..800).random().toLong())
+                    Thread.sleep((100..200).random().toLong())
                 }
             }
         }
@@ -370,7 +378,7 @@ class PartnerHunterDeck : DeckStrategy() {
         me.playArea.cards.toList().forEach { c ->
             if (c.isLaunchpad && me.usableResource >= c.launchCost()) {
                 c.action.launch()
-                Thread.sleep((400..600).random().toLong())
+                Thread.sleep((80..150).random().toLong())
             }
         }
     }
@@ -422,7 +430,7 @@ class PartnerHunterDeck : DeckStrategy() {
             if (small != null && (enemy.atc >= 3 || enemy.isTaunt)) {
                 log.info { "预清空间: ${small.entityName}(${small.atc}/${small.health})→${enemy.entityName}(${enemy.atc}/${enemy.health})" }
                 small.action.attack(enemy)
-                Thread.sleep((200..350).random().toLong())
+                Thread.sleep((80..150).random().toLong())
                 continue
             }
             // 如果没有小怪但有能优势交换的
@@ -430,7 +438,7 @@ class PartnerHunterDeck : DeckStrategy() {
             if (favorable != null && favorable.atc >= enemy.health && enemy.atc >= 3) {
                 log.info { "预清空间: ${favorable.entityName}(${favorable.atc}/${favorable.health})→${enemy.entityName}(${enemy.atc}/${enemy.health})" }
                 favorable.action.attack(enemy)
-                Thread.sleep((200..350).random().toLong())
+                Thread.sleep((80..150).random().toLong())
             }
         }
     }
@@ -616,13 +624,14 @@ class PartnerHunterDeck : DeckStrategy() {
             v += known!!.aoeDamage * enemies.size * 0.6
         }
 
-        // 炼金师翻转: 场上有高生命低攻击随从时加分
+        // 炼金师翻转: 场上有高生命低攻击随从时加分，无目标则惩罚
         if (known?.isFlip == true) {
             val myMinions = WAR.me.playArea.cards.filter { it.cardType == CardTypeEnum.MINION }
             val hasFlipTarget = myMinions.any { it.health >= 10 && it.atc <= 2 }
             val hasEnemyFlipTarget = enemies.any { it.atc >= 8 && it.health <= 2 }
-            if (hasFlipTarget) v += 5.0     // 翻转己方高血怪→斩杀
-            if (hasEnemyFlipTarget) v += 3.0 // 翻转敌方高攻怪→解场
+            if (hasFlipTarget) v += 5.0
+            else if (hasEnemyFlipTarget) v += 3.0
+            else v -= 4.0  // 无有效翻转目标，降低价值
         }
 
         // 满血治疗惩罚
@@ -668,7 +677,7 @@ class PartnerHunterDeck : DeckStrategy() {
             if (attacker != null) {
                 log.info { "解高威胁: ${attacker.entityName}(${attacker.atc}/${attacker.health})→${enemy.entityName}(${enemy.atc}/${enemy.health})" }
                 attacker.action.attack(enemy)
-                Thread.sleep((200..350).random().toLong())
+                Thread.sleep((80..150).random().toLong())
             }
         }
     }
@@ -718,7 +727,7 @@ class PartnerHunterDeck : DeckStrategy() {
             if (should) {
                 log.info { "主动解场: ${attacker.entityName}(${attacker.atc}/${attacker.health})→${enemy.entityName}(${enemy.atc}/${enemy.health})" }
                 attacker.action.attack(enemy)
-                Thread.sleep((250..400).random().toLong())
+                Thread.sleep((80..150).random().toLong())
             }
         }
     }
@@ -730,8 +739,8 @@ class PartnerHunterDeck : DeckStrategy() {
             val c = swc.card
             val known = KNOWN_CARD_MAP[c.cardId]
             when {
+                known?.isUpgradeCompanion == true -> -5 // 升级牌绝对优先
                 c.cost == 0 -> 0
-                known?.isUpgradeCompanion == true -> 5  // 升级牌最高优先
                 c.cardId == "EDR_853" -> 7               // 熊皮优先(需格子触发战吼)
                 c.cardType == CardTypeEnum.LOCATION -> 10
                 c.cost in 1..3 && c.isBattlecry && c.atc <= 1 -> 15
@@ -860,11 +869,14 @@ class PartnerHunterDeck : DeckStrategy() {
             s += known!!.aoeDamage * enemyCount2 * 0.3
         }
 
-        // 翻转价值
+        // 翻转价值：无目标时惩罚
         if (known?.isFlip == true) {
             val myMinions = me.playArea.cards.filter { it.cardType == CardTypeEnum.MINION }
             val hasFlipTarget = myMinions.any { it.health >= 10 && it.atc <= 2 }
+            val hasEnemyFlipTarget = enemyMinions.any { it.atc >= 8 && it.health <= 2 }
             if (hasFlipTarget) s += 2.0
+            else if (hasEnemyFlipTarget) s += 1.0
+            else s -= 2.0
         }
 
         // 治疗牌惩罚
@@ -961,7 +973,7 @@ class PartnerHunterDeck : DeckStrategy() {
                 if (attacker != null && !attacker.isExhausted) {
                     log.info { "兜底解嘲讽: ${attacker.entityName}(${attacker.atc}/${attacker.health})→${taunt.entityName}(${taunt.atc}/${taunt.health})" }
                     attacker.action.attack(taunt)
-                    Thread.sleep((200..350).random().toLong())
+                    Thread.sleep((80..150).random().toLong())
                 }
             }
         }
@@ -979,7 +991,7 @@ class PartnerHunterDeck : DeckStrategy() {
                     if (!m.isExhausted && m.atc > 0) {
                         log.info { "兜底打脸: ${m.entityName}(${m.atc}/${m.health})→敌方英雄" }
                         m.action.attack(enemyHero)
-                        Thread.sleep((200..350).random().toLong())
+                        Thread.sleep((80..150).random().toLong())
                     }
                 }
             }
