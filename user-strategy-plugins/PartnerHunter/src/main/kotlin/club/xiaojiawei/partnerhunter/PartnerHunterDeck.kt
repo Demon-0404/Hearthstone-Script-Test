@@ -245,7 +245,7 @@ class PartnerHunterDeck : DeckStrategy() {
                 val cFmt = "%.1f".format(cScore)
                 log.info { "硬币 得分${cFmt}" }
                 coin.action.power()
-                Thread.sleep((600..900).random())
+                Thread.sleep((600..900).random().toLong())
                 finalCards = cCards
             }
         }
@@ -275,7 +275,7 @@ class PartnerHunterDeck : DeckStrategy() {
                     }
                     used += c.actualCost(me, enemyMinions)
                     // 速度优化：首张牌稍慢(模拟思考)，后续加快
-                    Thread.sleep(if (firstAction) (600..900).random() else (200..400).random())
+                    Thread.sleep(if (firstAction) (600..900).random().toLong() else (200..400).random().toLong())
                     firstAction = false
                 }
             }
@@ -323,7 +323,7 @@ class PartnerHunterDeck : DeckStrategy() {
                             c.action.autoPower(CARD_DATA_TRIE[c.cardId])
                         }
                     }
-                    Thread.sleep((150..300).random())
+                    Thread.sleep((150..300).random().toLong())
                 }
             }
         }
@@ -343,7 +343,7 @@ class PartnerHunterDeck : DeckStrategy() {
                 if (!has || me.usableResource >= p.cost + 3) {
                     log.info { "英雄技能" }
                     p.action.power()
-                    Thread.sleep((500..800).random())
+                    Thread.sleep((500..800).random().toLong())
                 }
             }
         }
@@ -352,7 +352,7 @@ class PartnerHunterDeck : DeckStrategy() {
         me.playArea.cards.toList().forEach { c ->
             if (c.isLaunchpad && me.usableResource >= c.launchCost()) {
                 c.action.launch()
-                Thread.sleep((400..600).random())
+                Thread.sleep((400..600).random().toLong())
             }
         }
     }
@@ -404,7 +404,7 @@ class PartnerHunterDeck : DeckStrategy() {
             if (small != null && (enemy.atc >= 3 || enemy.isTaunt)) {
                 log.info { "预清空间: ${small.entityName}(${small.atc}/${small.health})→${enemy.entityName}(${enemy.atc}/${enemy.health})" }
                 small.action.attack(enemy)
-                Thread.sleep((200..350).random())
+                Thread.sleep((200..350).random().toLong())
                 continue
             }
             // 如果没有小怪但有能优势交换的
@@ -412,7 +412,7 @@ class PartnerHunterDeck : DeckStrategy() {
             if (favorable != null && favorable.atc >= enemy.health && enemy.atc >= 3) {
                 log.info { "预清空间: ${favorable.entityName}(${favorable.atc}/${favorable.health})→${enemy.entityName}(${enemy.atc}/${enemy.health})" }
                 favorable.action.attack(enemy)
-                Thread.sleep((200..350).random())
+                Thread.sleep((200..350).random().toLong())
             }
         }
     }
@@ -649,7 +649,7 @@ class PartnerHunterDeck : DeckStrategy() {
             if (attacker != null) {
                 log.info { "解高威胁: ${attacker.entityName}(${attacker.atc}/${attacker.health})→${enemy.entityName}(${enemy.atc}/${enemy.health})" }
                 attacker.action.attack(enemy)
-                Thread.sleep((200..350).random())
+                Thread.sleep((200..350).random().toLong())
             }
         }
     }
@@ -699,7 +699,7 @@ class PartnerHunterDeck : DeckStrategy() {
             if (should) {
                 log.info { "主动解场: ${attacker.entityName}(${attacker.atc}/${attacker.health})→${enemy.entityName}(${enemy.atc}/${enemy.health})" }
                 attacker.action.attack(enemy)
-                Thread.sleep((250..400).random())
+                Thread.sleep((250..400).random().toLong())
             }
         }
     }
@@ -942,7 +942,7 @@ class PartnerHunterDeck : DeckStrategy() {
                 if (attacker != null && !attacker.isExhausted) {
                     log.info { "兜底解嘲讽: ${attacker.entityName}(${attacker.atc}/${attacker.health})→${taunt.entityName}(${taunt.atc}/${taunt.health})" }
                     attacker.action.attack(taunt)
-                    Thread.sleep((200..350).random())
+                    Thread.sleep((200..350).random().toLong())
                 }
             }
         }
@@ -960,7 +960,7 @@ class PartnerHunterDeck : DeckStrategy() {
                     if (!m.isExhausted && m.atc > 0) {
                         log.info { "兜底打脸: ${m.entityName}(${m.atc}/${m.health})→敌方英雄" }
                         m.action.attack(enemyHero)
-                        Thread.sleep((200..350).random())
+                        Thread.sleep((200..350).random().toLong())
                     }
                 }
             }
