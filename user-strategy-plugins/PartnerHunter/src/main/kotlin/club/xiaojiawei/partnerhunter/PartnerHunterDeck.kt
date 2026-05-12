@@ -111,10 +111,24 @@ class PartnerHunterDeck : DeckStrategy() {
     // ==================== 出牌策略 ====================
 
     override fun executeOutCard() {
+        try {
+            executeOutCardInternal()
+        } catch (e: Throwable) {
+            log.error(e) { "executeOutCard 异常" }
+        }
+    }
+
+    private fun executeOutCardInternal() {
         val me = WAR.me
-        if (!me.isValid()) return
+        if (!me.isValid()) {
+            log.warn { "executeOutCard: me无效" }
+            return
+        }
         val rival = WAR.rival
-        if (!rival.isValid()) return
+        if (!rival.isValid()) {
+            log.warn { "executeOutCard: rival无效" }
+            return
+        }
 
         val heroPower = me.playArea.power
         var plays = me.playArea.cards.toList()
@@ -124,10 +138,12 @@ class PartnerHunterDeck : DeckStrategy() {
 
         // 2. DP 背包计算出牌（不过滤战吼/法术，参考 HsRadicalDeckStrategy）
         val hands = me.handArea.cards.toList()
+        log.info { "手牌${hands.size}张 可用水晶${me.usableResource}" }
         val myHandCardsCopy = hands.toMutableList()
         myHandCardsCopy.removeAll { card -> card.isCoinCard }
 
         val (score, resultCards) = DeckStrategyUtil.calcPowerOrderConvert(myHandCardsCopy, me.usableResource)
+        log.info { "DP得分${score} 选中${resultCards.size}张" }
 
         var finalCards = resultCards
         val coinCard = DeckStrategyUtil.findCoin(hands)
@@ -160,6 +176,8 @@ class PartnerHunterDeck : DeckStrategy() {
                     }
                 }
             }
+        } else {
+            log.info { "DP未选中任何牌" }
         }
 
         // 4. 解场（多线程递归清场）
@@ -169,10 +187,7 @@ class PartnerHunterDeck : DeckStrategy() {
         plays = me.playArea.cards.toList()
         DeckStrategyUtil.activeLocation(plays)
 
-        // 6. 清场后补牌（powerCard 此时打白板随从没问题）
-        DeckStrategyUtil.powerCard(me, rival)
-
-        // 7. 英雄技能
+        // 6. 英雄技能
         heroPower?.let { power ->
             if (me.usableResource >= power.cost) {
                 val hasPlayable = me.handArea.cards.any {
@@ -187,7 +202,7 @@ class PartnerHunterDeck : DeckStrategy() {
             }
         }
 
-        // 8. 法力渴求/激发
+        // 7. 法力渴求/激发
         me.playArea.cards.toList().forEach { card ->
             if (card.isLaunchpad && me.usableResource >= card.launchCost()) {
                 card.action.launch()
