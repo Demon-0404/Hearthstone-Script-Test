@@ -103,6 +103,11 @@ private val KNOWN_CARD_MAP: Map<String, KnownCardInfo> = mapOf(
     "TLC_480" to KnownCardInfo(  // 克罗格，环形山之王 9费8/7 野兽 回合结束:所有敌方随从变为1/1
         cardType = CardTypeEnum.MINION, atc = 8, health = 7,
         cardRace = CardRaceEnum.PET, endOfTurnValue = 6.0),
+    "CORE_UNG_928" to KnownCardInfo(  // 焦油爬行者 3费1/5 嘲讽(对方回合+2攻)
+        cardType = CardTypeEnum.MINION, atc = 1, health = 5, isTaunt = true),
+    "FIR_953" to KnownCardInfo(  // 熔岩猎犬 5费5/8 野兽 突袭
+        cardType = CardTypeEnum.MINION, atc = 5, health = 8,
+        cardRace = CardRaceEnum.PET, isRush = true),
     // --- 动物伙伴相关 ---
     "CORE_OG_211" to KnownCardInfo(  // 兽群呼唤 9费 召唤全部三个动物伙伴
         cardType = CardTypeEnum.SPELL, bonus = 10.0, needsSpace = 3),
@@ -163,7 +168,9 @@ class PartnerHunterDeck : DeckStrategy() {
         if (card.cardRace == CardRaceEnum.PET) score += 0.25
         if (card.isBattlecry) score += 0.2
         if (card.cardType == CardTypeEnum.SPELL && card.cost <= 2) score += 0.15
-        if (card.cardType == CardTypeEnum.SPELL && card.cost >= 5) score -= 0.35
+        // 高费法术/随从强烈惩罚（尤其兽群呼唤等9费牌不应留）
+        if (card.cost >= 7) score -= 1.5
+        else if (card.cost >= 5 && card.cardType == CardTypeEnum.SPELL) score -= 0.8
         if (card.cardType == CardTypeEnum.WEAPON) score += 0.1
         if (card.cost > 0) {
             score += (card.health + card.atc).toDouble() / card.cost * 0.08
@@ -171,7 +178,10 @@ class PartnerHunterDeck : DeckStrategy() {
         if (card.cost in 1..3 && card.isBattlecry && card.atc <= 1) score += 0.15
         val known = KNOWN_CARD_MAP[card.cardId]
         if (known != null) {
-            score += known.bonus * 0.15
+            // bonus不用于高费非升级牌的留牌决策(避免兽群呼唤被误留)
+            if (card.cost <= maxCost || known.isUpgradeCompanion) {
+                score += known.bonus * 0.15
+            }
             if (known.isUpgradeCompanion) score += 0.3
         }
         CARD_DATA_TRIE[card.cardId]?.let { cardData ->
@@ -210,8 +220,8 @@ class PartnerHunterDeck : DeckStrategy() {
         val myMinionCount = me.playArea.cards.count { it.cardType == CardTypeEnum.MINION }
         log.info { "=== ${me.usableResource}费 手牌${me.handArea.cards.size} 敌${enemyMinions.size}个(攻${enemyAtk}) ===" }
 
-        // 2.5 场面空间预清（满场或接近满场时先送小怪）
-        if (myMinionCount >= 5) {
+        // 2.5 场面空间预清（4+随从时先送小怪腾格子）
+        if (myMinionCount >= 4) {
             preClearForSpace(me, enemyMinions)
         }
 
@@ -264,6 +274,14 @@ class PartnerHunterDeck : DeckStrategy() {
             for (swc in sorted) {
                 val c = swc.card
                 if (me.usableResource >= c.actualCost(me, enemyMinions)) {
+                    // 出牌前预清：检查是否需要腾格子
+                    val known = KNOWN_CARD_MAP[c.cardId]
+                    val myMinionCnt = me.playArea.cards.count { it.cardType == CardTypeEnum.MINION }
+                    val needSpace = known?.needsSpace ?: (if (c.cardType == CardTypeEnum.MINION) 1 else 0)
+                    if (myMinionCnt + needSpace > 7) {
+                        // 格子不够：尝试预清低价值随从
+                        preClearForSpace(me, enemyMinions)
+                    }
                     if (c.cardType === CardTypeEnum.SPELL || c.cardType === CardTypeEnum.HERO) {
                         if (!me.playArea.isFull) {
                             trackCompanionUpgrade(c)
@@ -315,8 +333,8 @@ class PartnerHunterDeck : DeckStrategy() {
                     if (c.cardType === CardTypeEnum.SPELL || c.cardType === CardTypeEnum.HERO) {
                         c.action.autoPower(CARD_DATA_TRIE[c.cardId])
                     } else if (!me.playArea.isFull) {
-                        // 满场前再预清一次
-                        if (me.playArea.cards.count { it.cardType == CardTypeEnum.MINION } >= 6) {
+                        // 接近满场前预清低价值随从
+                        if (me.playArea.cards.count { it.cardType == CardTypeEnum.MINION } >= 5) {
                             preClearForSpace(me, enemyMinions)
                         }
                         if (!me.playArea.isFull) {
@@ -523,10 +541,11 @@ class PartnerHunterDeck : DeckStrategy() {
             v += companionLevel * 2.5  // 等级越高动物伙伴越值钱
         }
 
-        // 需要空格子的卡：场面满时惩罚
+        // 需要空格子的卡：每个缺失格子强力惩罚(避免卡格子浪费召唤)
         if (known?.needsSpace ?: 0 > 0) {
             val freeSlots = 7 - WAR.me.playArea.cards.count { it.cardType == CardTypeEnum.MINION }
-            if (freeSlots < known!!.needsSpace) v -= 4.0
+            val missing = known!!.needsSpace - freeSlots
+            if (missing > 0) v -= missing * 6.0
         }
 
         // 升级牌（极大提高优先级）
