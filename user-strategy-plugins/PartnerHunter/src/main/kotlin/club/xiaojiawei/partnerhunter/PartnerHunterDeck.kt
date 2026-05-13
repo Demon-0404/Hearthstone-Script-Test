@@ -39,6 +39,10 @@ private data class KnownCardInfo(
     val isElusive: Boolean = false,            // 扰魔
     val endOfTurnValue: Double = 0.0,          // 回合结束效果价值
     val needsSpace: Int = 0,                   // 需要空格子数（召唤类卡牌）
+    val needsTargeting: Boolean = false,       // 指向性法术：需要手动点击目标
+    val targetsEnemy: Boolean = false,         // 目标为敌方（true=敌方, false=友方）
+    val isChooseOne: Boolean = false,          // 抉择牌
+    val chooseOneIndex: Int = 0,               // 抉择默认选项(0或1)
 )
 
 private val KNOWN_CARD_MAP: Map<String, KnownCardInfo> = mapOf(
@@ -82,8 +86,9 @@ private val KNOWN_CARD_MAP: Map<String, KnownCardInfo> = mapOf(
         cardType = CardTypeEnum.MINION, atc = 7, health = 7, bonus = 1.0),
     "EDR_251" to KnownCardInfo(  // 龙鳞军备 1费
         cardType = CardTypeEnum.SPELL, bonus = 1.0),
-    "CORE_BAR_801" to KnownCardInfo(  // 击伤猎物 2费
-        cardType = CardTypeEnum.SPELL, bonus = 0.5),
+    "CORE_BAR_801" to KnownCardInfo(  // 击伤猎物 1费 指向敌方随从
+        cardType = CardTypeEnum.SPELL, bonus = 0.5,
+        needsTargeting = true, targetsEnemy = true),
     "TLC_823" to KnownCardInfo(  // 恐惧畏缩 2费
         cardType = CardTypeEnum.SPELL, bonus = 0.5),
     "FIR_954" to KnownCardInfo(  // 焚烧 1费
@@ -164,18 +169,17 @@ class PartnerHunterDeck : DeckStrategy() {
         val maxCost = if (isGoingFirst) 3 else 4
         if (card.cost == 1) score += 0.5
         if (card.cost in 2..maxCost) score += 0.3
+        // 高费牌强烈惩罚（7+费开局等于手牌-1）
+        if (card.cost >= 7) score -= 3.0
+        else if (card.cost >= 5 && card.cardType == CardTypeEnum.SPELL) score -= 0.8
         else if (card.cost > maxCost) {
-            // 升级牌即使费用高也要留
             val known = KNOWN_CARD_MAP[card.cardId]
-            if (known?.isUpgradeCompanion == true) score += 0.5
+            if (known?.isUpgradeCompanion == true) score += 0.2
             else score -= 0.4
         }
         if (card.cardRace == CardRaceEnum.PET) score += 0.25
         if (card.isBattlecry) score += 0.2
         if (card.cardType == CardTypeEnum.SPELL && card.cost <= 2) score += 0.15
-        // 高费法术/随从强烈惩罚（尤其兽群呼唤等9费牌不应留）
-        if (card.cost >= 7) score -= 1.5
-        else if (card.cost >= 5 && card.cardType == CardTypeEnum.SPELL) score -= 0.8
         if (card.cardType == CardTypeEnum.WEAPON) score += 0.1
         if (card.cost > 0) {
             score += (card.health + card.atc).toDouble() / card.cost * 0.08
@@ -296,11 +300,11 @@ class PartnerHunterDeck : DeckStrategy() {
                     if (c.cardType === CardTypeEnum.SPELL || c.cardType === CardTypeEnum.HERO) {
                         if (!me.playArea.isFull) {
                             trackCompanionUpgrade(c)
-                            c.action.autoPower(CARD_DATA_TRIE[c.cardId])
+                            playCardWithTargeting(c, me, rival)
                         }
                     } else {
                         if (me.playArea.isFull) break
-                        c.action.autoPower(CARD_DATA_TRIE[c.cardId])
+                        playCardWithTargeting(c, me, rival)
                     }
                     used += c.actualCost(me, enemyMinions)
                     // 速度优化：首张牌稍慢(模拟思考)，后续加快
@@ -338,7 +342,7 @@ class PartnerHunterDeck : DeckStrategy() {
                 val actualCost = c.actualCost(me, enemyMinions)
                 if (me.usableResource >= actualCost) {
                     if (c.cardType === CardTypeEnum.SPELL || c.cardType === CardTypeEnum.HERO) {
-                        c.action.autoPower(CARD_DATA_TRIE[c.cardId])
+                        playCardWithTargeting(c, me, rival)
                     } else if (!me.playArea.isFull) {
                         // 接近满场前预清低价值随从（斩杀/叫杀时跳过）
                         if (!hasLethal && !nearLethal &&
@@ -346,7 +350,7 @@ class PartnerHunterDeck : DeckStrategy() {
                             preClearForSpace(me, enemyMinions)
                         }
                         if (!me.playArea.isFull) {
-                            c.action.autoPower(CARD_DATA_TRIE[c.cardId])
+                            playCardWithTargeting(c, me, rival)
                         }
                     }
                     Thread.sleep((80..150).random().toLong())
@@ -391,7 +395,9 @@ class PartnerHunterDeck : DeckStrategy() {
             .sumOf { it.atc }
         val hero = rival.playArea.hero ?: return false
         val rivalHp = hero.health + hero.armor - hero.damage
-        val hasTaunt = rival.playArea.cards.any { it.isTaunt && it.cardType == CardTypeEnum.MINION }
+        val hasTaunt = rival.playArea.cards.any {
+    it.cardType == CardTypeEnum.MINION && (it.isTaunt || it.cardType == CardTypeEnum.INVALID)
+}
         return myAtk >= rivalHp && !hasTaunt
     }
 
@@ -407,7 +413,9 @@ class PartnerHunterDeck : DeckStrategy() {
             .sumOf { it.atc }
         val hero = rival.playArea.hero ?: return false
         val rivalHp = hero.health + hero.armor - hero.damage
-        val hasTaunt = rival.playArea.cards.any { it.isTaunt && it.cardType == CardTypeEnum.MINION }
+        val hasTaunt = rival.playArea.cards.any {
+    it.cardType == CardTypeEnum.MINION && (it.isTaunt || it.cardType == CardTypeEnum.INVALID)
+}
         return myAtk >= rivalHp * 0.7 && !hasTaunt
     }
 
@@ -427,7 +435,7 @@ class PartnerHunterDeck : DeckStrategy() {
             val small = attackers
                 .filter { it.atc <= 2 && it.health <= 3 }
                 .minByOrNull { it.atc.toDouble() * it.health.toDouble() }
-            if (small != null && (enemy.atc >= 3 || enemy.isTaunt)) {
+            if (small != null && (enemy.atc >= 3 || enemy.isTaunt || enemy.cardType == CardTypeEnum.INVALID)) {
                 log.info { "预清空间: ${small.entityName}(${small.atc}/${small.health})→${enemy.entityName}(${enemy.atc}/${enemy.health})" }
                 small.action.attack(enemy)
                 Thread.sleep((80..150).random().toLong())
@@ -556,11 +564,20 @@ class PartnerHunterDeck : DeckStrategy() {
             if (missing > 0) v -= missing * 6.0
         }
 
-        // 升级牌（极大提高优先级）
+        // 升级牌（低等级时价值更高—等级越低越需要升级伙伴）
         val isUpgradeByProps = c.cost in 1..3 && effectiveBattlecry && effectiveAtc <= 1
         val isUpgradeByMap = known?.isUpgradeCompanion == true
         if (isUpgradeByProps || isUpgradeByMap) {
-            v += 8.0
+            v += when (companionLevel) {
+                0 -> 14.0   // 基础伙伴(3费野兽)→极度需要升级
+                1 -> 11.0   // +1费阶段
+                2 -> 8.0    // 更高费阶段
+                else -> 8.0
+            }
+            // 发现/生成类升级牌优先级加成
+            if (isUpgradeByMap && known?.isBattlecry == true && known?.atc ?: 0 <= 3) {
+                v += 2.0  // 小身材战吼升级牌(如MEND_301灵语猎手)额外奖励
+            }
         }
 
         // 双倍战吼
@@ -732,6 +749,51 @@ class PartnerHunterDeck : DeckStrategy() {
         }
     }
 
+    // ==================== 出牌辅助：处理指向性法术和抉择牌 ====================
+
+    private fun playCardWithTargeting(c: Card, me: Player, rival: Player) {
+        val cardInfo = CARD_DATA_TRIE[c.cardId]
+        val known = KNOWN_CARD_MAP[c.cardId]
+
+        // 天灾：抉择牌（需要先打出再选抉择）
+        if (known?.isChooseOne == true) {
+            c.action.power()  // 先打出牌触发抉择界面
+            Thread.sleep((200..350).random().toLong())
+            c.action.chooseOne(known.chooseOneIndex)
+            return
+        }
+
+        // 天灾：已知需要指向的卡牌（手动定向优先于 SDK autoPower）
+        if (known?.needsTargeting == true) {
+            val targets = if (known.targetsEnemy) {
+                rival.playArea.cards.filter { it.cardType == CardTypeEnum.MINION && it.canBeTargetedByRivalSpells() }
+            } else {
+                me.playArea.cards.filter { it.cardType == CardTypeEnum.MINION && it.canBeTargetedByMySpells() }
+            }
+            if (targets.isNotEmpty()) {
+                // 优先选高价值目标（敌方：选高攻击/高价值；友方：选低血量受伤的）
+                val target = if (known.targetsEnemy) {
+                    targets.maxByOrNull { it.atc * 2 + it.health }
+                } else {
+                    targets.filter { it.damage > 0 }.maxByOrNull { it.health - it.damage }
+                        ?: targets.maxByOrNull { it.health }
+                }
+                if (target != null) {
+                    log.info { "指向出牌: ${c.entityName}→${target.entityName}(${target.atc}/${target.health})" }
+                    c.action.power(target)
+                    return
+                }
+            }
+            // 无可用目标：降级为普通 power（可能会失败但至少尝试）
+            log.info { "指向出牌(${c.entityName})无可用目标，尝试普通打出" }
+            c.action.power()
+            return
+        }
+
+        // 正常路径：走 SDK autoPower
+        c.action.autoPower(cardInfo)
+    }
+
     // ==================== 排序 ====================
 
     private fun sortCards(cards: List<SimulateWeightCard>): List<SimulateWeightCard> {
@@ -775,6 +837,20 @@ class PartnerHunterDeck : DeckStrategy() {
     private fun scoreDiscover(c: Card, me: Player): Double {
         val known = KNOWN_CARD_MAP[c.cardId]
         var s = 0.5
+
+        // 爆牌预防：手牌快满时强烈倾向低费牌
+        val handSize = me.handArea.cards.size
+        if (handSize >= 9) {
+            if (c.cost <= 1) s += 3.0
+            else if (c.cost <= 3) s += 1.0
+            else if (c.cost >= 5) s -= 4.0
+        } else if (handSize >= 8) {
+            if (c.cost <= 2) s += 1.5
+            else if (c.cost >= 6) s -= 3.0
+        } else if (handSize >= 7) {
+            if (c.cost <= 3) s += 0.5
+            else if (c.cost >= 7) s -= 1.5
+        }
 
         // 用已知信息覆盖
         var effType = c.cardType
@@ -906,15 +982,18 @@ class PartnerHunterDeck : DeckStrategy() {
     // ==================== 回溯 ====================
 
     override fun execChooseTimeLine(tle: TimelineEvent) {
-        // 伙伴猎降低回溯阈值：手牌无升级牌时更倾向回溯
+        // 手中有升级牌时更倾向回溯(提高阈值→更难keep→更多回溯→争取打出升级牌)
         val me = WAR.me
         val hasUpgrade = me.handArea.cards.any { c ->
             val known = KNOWN_CARD_MAP[c.cardId]
             known?.isUpgradeCompanion == true ||
                 (c.cost in 1..3 && c.isBattlecry && c.atc <= 1)
         }
-        val threshold = if (hasUpgrade) 0.35 else 0.55
-        if (scoreBoard(me) >= threshold) tle.keep() else tle.rewind()
+        // 有升级牌：阈值高→倾向回溯；无升级牌：阈值中等→场面好则维持
+        val threshold = if (hasUpgrade) 0.65 else 0.45
+        val score = scoreBoard(me)
+        log.info { "时间线评分=${"%.2f".format(score)} 阈值=${threshold} 有升级=${hasUpgrade} → ${if (score >= threshold) "维持" else "回溯"}" }
+        if (score >= threshold) tle.keep() else tle.rewind()
     }
 
     private fun scoreBoard(me: Player): Double {
@@ -922,15 +1001,22 @@ class PartnerHunterDeck : DeckStrategy() {
         val hero = me.playArea.hero ?: return 0.3
         val maxHp = hero.health + hero.armor
         val curHp = maxHp - hero.damage
-        val ratio = (curHp.toDouble() / maxHp).coerceIn(0.0, 1.0)
-        s += (ratio - 0.5) * 0.4
-        s += (me.playArea.cards.size - 2).coerceIn(-2, 3) * 0.08
-        s += (me.handArea.cards.size - 3).coerceIn(-3, 3) * 0.05
+        val hpRatio = (curHp.toDouble() / maxHp).coerceIn(0.0, 1.0)
+        s += (hpRatio - 0.5) * 0.5  // 血量影响加大
+        s += (me.playArea.cards.size - 2).coerceIn(-2, 3) * 0.06
+        s += (me.handArea.cards.size - 3).coerceIn(-3, 3) * 0.04
         val beasts = me.playArea.cards.count { it.cardRace == CardRaceEnum.PET }
-        s += (beasts - 1).coerceIn(-1, 3) * 0.06
-        if (me.usableResource >= 5) s += 0.1
-        val enemyCount = WAR.rival.playArea.cards.count { it.cardType == CardTypeEnum.MINION }
-        s -= (enemyCount - 2).coerceAtLeast(0) * 0.06
+        s += (beasts - 1).coerceIn(-1, 3) * 0.05
+        if (me.usableResource >= 5) s += 0.12
+        val rival = WAR.rival
+        val enemyCount = rival.playArea.cards.count { it.cardType == CardTypeEnum.MINION }
+        val enemyAtk = rival.playArea.cards.filter { it.cardType == CardTypeEnum.MINION }.sumOf { it.atc }
+        s -= (enemyCount - 2).coerceAtLeast(0) * 0.08
+        // 敌方攻击力高=场面危险→倾向回溯
+        if (enemyAtk >= 8) s -= 0.15
+        if (enemyAtk >= 15) s -= 0.10
+        // 手牌少→倾向回溯
+        if (me.handArea.cards.size <= 2) s -= 0.08
         return s.coerceIn(0.0, 1.0)
     }
 
@@ -959,19 +1045,22 @@ class PartnerHunterDeck : DeckStrategy() {
         }
         if (unchecked.isEmpty()) return
 
+        // 已知嘲讽 + 未知随从（cardType==INVALID 大概率也是嘲讽/特殊随从）
         val enemyTaunts = rival.playArea.cards.filter {
-            it.isTaunt && it.cardType == CardTypeEnum.MINION && !it.isExhausted
+            it.cardType == CardTypeEnum.MINION && !it.isExhausted &&
+                (it.isTaunt || it.cardType == CardTypeEnum.INVALID)
         }
         val enemyHero = rival.playArea.hero
 
         if (enemyTaunts.isNotEmpty()) {
-            // 有嘲讽：用最优交换清掉
+            // 有嘲讽（含未知随从）：用最优交换清掉
             for (taunt in enemyTaunts.sortedByDescending { it.atc }) {
                 val attacker = unchecked
                     .filter { !it.isExhausted && it.atc > 0 }
                     .minByOrNull { it.atc.toDouble() * it.health.toDouble() }
                 if (attacker != null && !attacker.isExhausted) {
-                    log.info { "兜底解嘲讽: ${attacker.entityName}(${attacker.atc}/${attacker.health})→${taunt.entityName}(${taunt.atc}/${taunt.health})" }
+                    val reason = if (taunt.isTaunt) "嘲讽" else "未知随从(疑为嘲讽)"
+                    log.info { "兜底解${reason}: ${attacker.entityName}(${attacker.atc}/${attacker.health})→${taunt.entityName}(${taunt.atc}/${taunt.health})" }
                     attacker.action.attack(taunt)
                     Thread.sleep((80..150).random().toLong())
                 }
@@ -984,7 +1073,8 @@ class PartnerHunterDeck : DeckStrategy() {
         }
         if (stillUnchecked.isNotEmpty() && enemyHero != null) {
             val stillHasTaunt = rival.playArea.cards.any {
-                it.isTaunt && it.cardType == CardTypeEnum.MINION && !it.isExhausted
+                it.cardType == CardTypeEnum.MINION && !it.isExhausted &&
+                    (it.isTaunt || it.cardType == CardTypeEnum.INVALID)
             }
             if (!stillHasTaunt) {
                 for (m in stillUnchecked.sortedByDescending { it.atc }) {
