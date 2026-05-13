@@ -129,6 +129,33 @@ private val KNOWN_CARD_MAP: Map<String, KnownCardInfo> = mapOf(
         cardRace = CardRaceEnum.DRAGON, isTaunt = true),
     "EDR_102t" to KnownCardInfo(  // 黑暗之赐 法术token
         cardType = CardTypeEnum.SPELL, bonus = 1.0),
+    // --- 法术召唤的嘲讽随从(敌方) ---
+    "TSC_650t" to KnownCardInfo(  // 虎鲸 6/6 嘲讽(划水好友召唤)
+        cardType = CardTypeEnum.MINION, atc = 6, health = 6, isTaunt = true),
+    "CORE_TSC_650" to KnownCardInfo(  // 划水好友 5费 德鲁伊法术 召唤两个虎鲸
+        cardType = CardTypeEnum.SPELL, bonus = 0.0),
+    "TSC_650a" to KnownCardInfo(  // 号令虎鲸(划水好友抉择选项之一)
+        cardType = CardTypeEnum.SPELL),
+    "TSC_650d" to KnownCardInfo(  // 海獭欢游(划水好友抉择选项之一)
+        cardType = CardTypeEnum.SPELL),
+    // --- 其他常见嘲讽随从(防止isTaunt未正确设置) ---
+    "CORE_GVG_085" to KnownCardInfo(  // 吵吵机器人 2费1/2 圣盾嘲讽
+        cardType = CardTypeEnum.MINION, atc = 1, health = 2,
+        isTaunt = true, isDivineShield = true),
+    "CORE_BOT_911" to KnownCardInfo(  // 青铜门卫 3费1/5 磁力嘲讽
+        cardType = CardTypeEnum.MINION, atc = 1, health = 5, isTaunt = true),
+    "CORE_OG_218" to KnownCardInfo(  // 血蹄勇士 4费2/6 嘲讽
+        cardType = CardTypeEnum.MINION, atc = 2, health = 6, isTaunt = true),
+    "CORE_ICC_807" to KnownCardInfo(  // 固守卫兵 1费1/3 嘲讽
+        cardType = CardTypeEnum.MINION, atc = 1, health = 3, isTaunt = true),
+    "CORE_TRL_401" to KnownCardInfo(  // 阿曼尼战熊 7费5/7 突袭嘲讽
+        cardType = CardTypeEnum.MINION, atc = 5, health = 7,
+        isTaunt = true, isRush = true),
+    "CORE_DRG_237" to KnownCardInfo(  // 庇护 2费 嘲讽 龙
+        cardType = CardTypeEnum.MINION, atc = 2, health = 4,
+        cardRace = CardRaceEnum.DRAGON, isTaunt = true),
+    "CORE_EX1_048" to KnownCardInfo(  // 森金持盾卫士 4费3/5 嘲讽
+        cardType = CardTypeEnum.MINION, atc = 3, health = 5, isTaunt = true),
     // --- 动物伙伴相关 ---
     "CORE_OG_211" to KnownCardInfo(  // 兽群呼唤 9费 召唤全部三个动物伙伴
         cardType = CardTypeEnum.SPELL, bonus = 10.0, needsSpace = 3),
@@ -239,6 +266,22 @@ class PartnerHunterDeck : DeckStrategy() {
         val hasBig = enemyMinions.any { it.atc >= 4 }
         val myMinionCount = me.playArea.cards.count { it.cardType == CardTypeEnum.MINION }
         log.info { "=== ${me.usableResource}费 手牌${me.handArea.cards.size} 敌${enemyMinions.size}个(攻${enemyAtk}) ===" }
+
+        // 敌方嘲讽诊断
+        for (em in enemyMinions) {
+            val detected = em.isEnemyTauntLike()
+            val source = when {
+                em.isTaunt -> "isTaunt"
+                em.cardType == CardTypeEnum.INVALID -> "INVALID"
+                KNOWN_CARD_MAP[em.cardId]?.isTaunt == true -> "KNOWN_MAP"
+                else -> "无"
+            }
+            if (detected) {
+                log.info { "  敌嘲讽: ${em.entityName}(${em.atc}/${em.health}) cardId=${em.cardId} 来源=${source}" }
+            } else if (em.cardType == CardTypeEnum.INVALID || em.cardId.isNotBlank()) {
+                log.warn { "  敌非嘲讽: ${em.entityName}(${em.atc}/${em.health}) cardId=${em.cardId} cardType=${em.cardType} isTaunt=${em.isTaunt} — 如漏检请加入KNOWN_CARD_MAP" }
+            }
+        }
 
         // 2.1 斩杀检测：优先于所有清场逻辑
         val hasLethal = checkLethal(me, rival)
@@ -414,9 +457,7 @@ class PartnerHunterDeck : DeckStrategy() {
             .sumOf { it.atc }
         val hero = rival.playArea.hero ?: return false
         val rivalHp = hero.health + hero.armor - hero.damage
-        val hasTaunt = rival.playArea.cards.any {
-    it.cardType == CardTypeEnum.MINION && (it.isTaunt || it.cardType == CardTypeEnum.INVALID)
-}
+        val hasTaunt = rival.playArea.cards.any { it.cardType == CardTypeEnum.MINION && it.isEnemyTauntLike() }
         return myAtk >= rivalHp && !hasTaunt
     }
 
@@ -432,10 +473,15 @@ class PartnerHunterDeck : DeckStrategy() {
             .sumOf { it.atc }
         val hero = rival.playArea.hero ?: return false
         val rivalHp = hero.health + hero.armor - hero.damage
-        val hasTaunt = rival.playArea.cards.any {
-    it.cardType == CardTypeEnum.MINION && (it.isTaunt || it.cardType == CardTypeEnum.INVALID)
-}
+        val hasTaunt = rival.playArea.cards.any { it.cardType == CardTypeEnum.MINION && it.isEnemyTauntLike() }
         return myAtk >= rivalHp * 0.7 && !hasTaunt
+    }
+
+    // ==================== 敌方嘲讽检测 ====================
+
+    /** 综合检测敌方随从是否有嘲讽: isTaunt框架字段 + INVALID未知卡 + KNOWN_CARD_MAP手动数据 */
+    private fun Card.isEnemyTauntLike(): Boolean {
+        return isTaunt || cardType == CardTypeEnum.INVALID || KNOWN_CARD_MAP[cardId]?.isTaunt == true
     }
 
     // ==================== 场面预清 ====================
@@ -445,9 +491,9 @@ class PartnerHunterDeck : DeckStrategy() {
             .filter { it.cardType == CardTypeEnum.MINION && it.atc > 0 && !it.isExhausted }
         if (myMinions.size < 2 || enemyMinions.isEmpty()) return
 
-        // 优先处理未知随从(疑为嘲讽)和高攻威胁
+        // 优先处理嘲讽和高攻威胁
         val sortedEnemies = enemyMinions.sortedByDescending {
-            (if (it.cardType == CardTypeEnum.INVALID || it.isTaunt) 100 else 0) + it.atc
+            (if (it.isEnemyTauntLike()) 100 else 0) + it.atc
         }
         for (enemy in sortedEnemies) {
             val attackers = myMinions.filter { !it.isExhausted && it.atc > 0 }
@@ -457,7 +503,7 @@ class PartnerHunterDeck : DeckStrategy() {
             val small = attackers
                 .filter { it.atc <= 3 && it.atc >= enemy.health }
                 .minByOrNull { it.atc.toDouble() * it.health.toDouble() }
-            if (small != null && (enemy.atc >= 2 || enemy.isTaunt || enemy.cardType == CardTypeEnum.INVALID)) {
+            if (small != null && (enemy.atc >= 2 || enemy.isEnemyTauntLike())) {
                 log.info { "预清空间: ${small.entityName}(${small.atc}/${small.health})→${enemy.entityName}(${enemy.atc}/${enemy.health})" }
                 small.action.attack(enemy)
                 Thread.sleep((80..150).random().toLong())
@@ -734,8 +780,8 @@ class PartnerHunterDeck : DeckStrategy() {
         val enemyMinions = rival.playArea.cards
             .filter { it.cardType == CardTypeEnum.MINION }
             .sortedByDescending {
-                // 优先解未知随从(疑为嘲讽)和高攻随从
-                (if (it.cardType == CardTypeEnum.INVALID || it.isTaunt) 50 else 0) + it.atc
+                // 优先解嘲讽和高攻随从
+                (if (it.isEnemyTauntLike()) 50 else 0) + it.atc
             }
         if (myMinions.isEmpty() || enemyMinions.isEmpty()) return
 
@@ -765,7 +811,7 @@ class PartnerHunterDeck : DeckStrategy() {
 
             // 解场条件：必须能降低实际威胁
             val canKill = attacker.atc >= enemy.health || attacker.isPoisonous
-            val isThreat = enemy.atc >= 3 || enemy.isTaunt || enemy.cardType == CardTypeEnum.INVALID
+            val isThreat = enemy.atc >= 3 || enemy.isEnemyTauntLike()
             val should = when {
                 canKill && isThreat -> true    // 能击杀高威胁目标
                 canKill && (attacker.isRush || attacker.isCharge) -> true  // 突袭/冲锋能击杀
@@ -1091,21 +1137,24 @@ class PartnerHunterDeck : DeckStrategy() {
         }
         if (unchecked.isEmpty()) return
 
-        // 已知嘲讽 + 未知随从（cardType==INVALID 大概率也是嘲讽/特殊随从）
+        // 嘲讽检测：isTaunt + INVALID + KNOWN_CARD_MAP
         val enemyTaunts = rival.playArea.cards.filter {
-            it.cardType == CardTypeEnum.MINION && !it.isExhausted &&
-                (it.isTaunt || it.cardType == CardTypeEnum.INVALID)
+            it.cardType == CardTypeEnum.MINION && !it.isExhausted && it.isEnemyTauntLike()
         }
         val enemyHero = rival.playArea.hero
 
         if (enemyTaunts.isNotEmpty()) {
-            // 有嘲讽（含未知随从）：用最优交换清掉
+            // 有嘲讽：用最优交换清掉
             for (taunt in enemyTaunts.sortedByDescending { it.atc }) {
                 val attacker = unchecked
                     .filter { !it.isExhausted && it.atc > 0 }
                     .minByOrNull { it.atc.toDouble() * it.health.toDouble() }
                 if (attacker != null && !attacker.isExhausted) {
-                    val reason = if (taunt.isTaunt) "嘲讽" else "未知随从(疑为嘲讽)"
+                    val reason = when {
+                        KNOWN_CARD_MAP[taunt.cardId]?.isTaunt == true -> "嘲讽(已知)"
+                        taunt.isTaunt -> "嘲讽"
+                        else -> "未知随从(疑为嘲讽)"
+                    }
                     log.info { "兜底解${reason}: ${attacker.entityName}(${attacker.atc}/${attacker.health})→${taunt.entityName}(${taunt.atc}/${taunt.health})" }
                     attacker.action.attack(taunt)
                     Thread.sleep((80..150).random().toLong())
@@ -1119,8 +1168,7 @@ class PartnerHunterDeck : DeckStrategy() {
         }
         if (stillUnchecked.isNotEmpty() && enemyHero != null) {
             val stillHasTaunt = rival.playArea.cards.any {
-                it.cardType == CardTypeEnum.MINION && !it.isExhausted &&
-                    (it.isTaunt || it.cardType == CardTypeEnum.INVALID)
+                it.cardType == CardTypeEnum.MINION && !it.isExhausted && it.isEnemyTauntLike()
             }
             if (!stillHasTaunt) {
                 for (m in stillUnchecked.sortedByDescending { it.atc }) {
