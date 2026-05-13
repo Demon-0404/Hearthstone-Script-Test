@@ -915,14 +915,34 @@ class TokenDruidDeck : DeckStrategy() {
             val modeLabel = if (chosenIndex == 0) "打2" else "铺场"
             log.info { "抉择: $cardLabel→$modeLabel(index=$chosenIndex) cardId=${c.cardId}" }
             try {
-                // 直接打出牌触发抉择 UI（不用 autoPower 避免 SDK 自动选）
-                c.action.power()
-                Thread.sleep((500..800).random().toLong())
-                val result = c.action.chooseOne(chosenIndex)
-                if (result == null) {
-                    log.warn { "抉择选择失败: $cardLabel index=$chosenIndex，重试" }
-                    Thread.sleep((300..500).random().toLong())
-                    c.action.chooseOne(chosenIndex)
+                // Step 1: 打出卡牌触发抉择 UI
+                // 使用 isPause=false 跳过内部 3.6s 延迟，由我们精确控制等待时间
+                var powerOk = c.action.power(isPause = false)
+                if (powerOk == null) {
+                    log.warn { "抉择: power()失败，重试" }
+                    Thread.sleep(400)
+                    powerOk = c.action.power(isPause = false)
+                }
+                if (powerOk == null) {
+                    log.error { "抉择: power()彻底失败，放弃抉择流程" }
+                    return
+                }
+                // Step 2: 等待抉择 UI 渲染（游戏需要约1-1.5秒显示3张抉择牌）
+                Thread.sleep((1500..2000).random().toLong())
+                // Step 3: 点击抉择选项，最多重试3次
+                var chooseOk = c.action.chooseOne(chosenIndex)
+                var retries = 0
+                while (chooseOk == null && retries < 3) {
+                    retries++
+                    log.warn { "抉择点击失败($retries/3): $cardLabel index=$chosenIndex" }
+                    Thread.sleep((500..800).random().toLong())
+                    chooseOk = c.action.chooseOne(chosenIndex)
+                }
+                if (chooseOk == null) {
+                    // 最终兜底：尝试点击另一个选项（至少把牌打出去）
+                    val altIndex = if (chosenIndex == 0) 1 else 0
+                    log.error { "抉择彻底失败: $cardLabel，尝试备选index=$altIndex" }
+                    c.action.chooseOne(altIndex)
                 }
             } catch (e: InterruptedException) {
                 log.warn { "抉择被中断: $cardLabel" }
