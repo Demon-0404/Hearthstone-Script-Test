@@ -56,7 +56,7 @@ private val KNOWN_CARD_MAP: Map<String, KnownCardInfo> = mapOf(
         cardType = CardTypeEnum.SPELL, bonus = 3.0, isRamp = true),
     "CATA_131" to KnownCardInfo(  // 费伍德树人 2费2/2 战吼：获得临时水晶，耗4法力变永久
         cardType = CardTypeEnum.MINION, atc = 2, health = 2,
-        isBattlecry = true, isRamp = true, bonus = 3.0),
+        isBattlecry = true, isRamp = true, bonus = 3.0), // 永久转化额外+3.0价值
     // --- 地标 ---
     "FIR_907" to KnownCardInfo(  // 阿梅达希尔 5费0/3 地标
         cardType = CardTypeEnum.LOCATION, bonus = 4.0, isLocation = true),
@@ -100,8 +100,9 @@ private val KNOWN_CARD_MAP: Map<String, KnownCardInfo> = mapOf(
         cardRace = CardRaceEnum.DEMON, isBattlecry = true,
         isDraw = true, drawCount = 1, bonus = 2.0),
     // --- 终端 ---
-    "CATA_139" to KnownCardInfo(  // 柳牙 6费0/5 巨型+4
-        cardType = CardTypeEnum.MINION, atc = 0, health = 5, bonus = 4.0),
+    "CATA_139" to KnownCardInfo(  // 柳牙 6费0/5 巨型+4（4个0/2腿，每回合腿+1/+1→本体复制）
+        cardType = CardTypeEnum.MINION, atc = 0, health = 5,
+        isTokenGenerator = true, tokensGenerated = 4, needsSpace = 5, bonus = 5.0),
     // --- 敌方嘲讽随从（常见铺场德对手的嘲讽）---
     "CORE_GVG_085" to KnownCardInfo(  // 吵吵机器人 2费1/2 圣盾嘲讽
         cardType = CardTypeEnum.MINION, atc = 1, health = 2,
@@ -139,6 +140,11 @@ private val KNOWN_CARD_MAP: Map<String, KnownCardInfo> = mapOf(
 // ==================== 铺场德-v1 策略主类 ====================
 
 class TokenDruidDeck : DeckStrategy() {
+
+    // 费伍德树人永久水晶转化：记录剩余需浮动的法力值（打出后需留4费转化）
+    private var manaToFloatForPermanent = 0
+    // 柳牙是否已打出（避免重复扣除格子）
+    private var wickerfangPlayed = false
 
     override fun name(): String = "铺场德-v1"
 
@@ -255,27 +261,43 @@ class TokenDruidDeck : DeckStrategy() {
 
         // 检测手牌类型分布（用于评分上下文）
         val hasBuffInHand = myCards.any { KNOWN_CARD_MAP[it.cardId]?.isBuff == true }
+        val hasTokenGenInHand = myCards.any { KNOWN_CARD_MAP[it.cardId]?.isTokenGenerator == true }
         val myTokenCount = me.playArea.cards.count {
             it.cardType == CardTypeEnum.MINION && it.atc <= 2
         }
         val hasTokensOnBoard = myTokenCount >= 2
+        // 手上有buff时，铺场牌应该获得额外优先级（先铺后buff）
+        val shouldPrioritizeTokens = hasBuffInHand && myMinionCount < 4
+
+        // 3.5 费伍德树人永久水晶转化：有树人场面时预留法力转化
+        val hasFelwoodOnBoard = me.playArea.cards.any { it.cardId == "CATA_131" }
+        val reserveForPermanent = if (hasFelwoodOnBoard && manaToFloatForPermanent > 0) {
+            log.info { "预留法力转化永久水晶: 剩余需浮动${manaToFloatForPermanent}费" }
+            minOf(manaToFloatForPermanent, 2)  // 每回合最多预留2费
+        } else 0
+        val dpMana = (me.usableResource - reserveForPermanent).coerceAtLeast(0)
 
         // 4. 自定义DP
-        val (dpScore, dpCards) = customDP(myCards, me.usableResource, enemyMinions,
+        val (dpScore, dpCards) = customDP(myCards, dpMana, enemyMinions,
             myMinionCount, freeSpace, hasTokensOnBoard, hasBuffInHand)
         val dpFmt = "%.1f".format(dpScore)
         log.info { "DP得分${dpFmt} 选中${dpCards.size}张" }
 
         var finalCards = dpCards
 
-        // 5. 硬币评估
+        // 5. 硬币评估：仅在能多出牌或出更高费关键牌时使用
         val coin = DeckStrategyUtil.findCoin(hands)
-        if (coin != null) {
-            val (cScore, cCards) = customDP(myCards, me.usableResource + 1, enemyMinions,
+        if (coin != null && me.usableResource <= 6) {
+            val (cScore, cCards) = customDP(myCards, dpMana + 1, enemyMinions,
                 myMinionCount, freeSpace, hasTokensOnBoard, hasBuffInHand)
-            if (cScore > dpScore + 1.5) {
+            val coinCardsCost = cCards.sumOf { it.card.actualCost(me, enemyMinions) }
+            val noCoinCardsCost = dpCards.sumOf { it.card.actualCost(me, enemyMinions) }
+            // 硬币必须让总消耗更多（确实施放了额外资源）或能提前出柳牙
+            val enablesWickerfang = cCards.any { it.card.cardId == "CATA_139" } && !dpCards.any { it.card.cardId == "CATA_139" }
+            if ((cScore > dpScore + 2.0 && coinCardsCost > noCoinCardsCost) || enablesWickerfang) {
                 val cFmt = "%.1f".format(cScore)
-                log.info { "硬币 得分${cFmt}" }
+                val extra = if (enablesWickerfang) " (出柳牙!)" else ""
+                log.info { "硬币 得分${cFmt}${extra}" }
                 coin.action.power()
                 Thread.sleep((100..180).random().toLong())
                 finalCards = cCards
@@ -289,19 +311,30 @@ class TokenDruidDeck : DeckStrategy() {
             log.info { "出牌序列:" }
             for (swc in sorted) {
                 val v = "%.1f".format(swc.weight)
-                log.info { "  ${swc.card.entityName}(${swc.card.cost}费)[v=${v}]" }
+                val label = swc.card.entityName.ifEmpty { swc.card.cardId.ifEmpty { "?" } }
+                log.info { "  $label(${swc.card.cost}费)[v=${v}]" }
             }
             var used = 0
             var firstAction = true
             for (swc in sorted) {
                 val c = swc.card
                 if (me.usableResource >= c.actualCost(me, enemyMinions)) {
-                    // 出牌前检查格子
                     val known = KNOWN_CARD_MAP[c.cardId]
                     val curMinionCnt = me.playArea.cards.count { it.cardType == CardTypeEnum.MINION }
+                    // 场面太小(<2随从)时不浪费法术buff牌，等后续铺场
+                    // 随从型buff（如长颈龙蛋）不跳过，因为可以独立站场
+                    if (known?.isBuff == true && c.cardType != CardTypeEnum.MINION &&
+                        curMinionCnt < 2 && !nearLethal) {
+                        log.info { "推迟buff: ${c.entityName.ifEmpty { c.cardId }} 场面仅${curMinionCnt}随从" }
+                        continue
+                    }
                     val needSpace = known?.needsSpace
                         ?: (if (c.cardType == CardTypeEnum.MINION) 1 else 0)
-                    if (curMinionCnt + needSpace > 7 && !hasLethal && !nearLethal) {
+                    // 柳牙：需要5个格子（1本体+4腿），格子不够先主动清场
+                    if (c.cardId == "CATA_139" && curMinionCnt + 5 > 7 && !hasLethal && !nearLethal) {
+                        log.info { "柳牙前清场: 当前${curMinionCnt}随从 需5格" }
+                        preClearForWickerfang(me, curMinionCnt)
+                    } else if (curMinionCnt + needSpace > 7 && !hasLethal && !nearLethal) {
                         preClearForSpace(me, enemyMinions)
                     }
                     if (c.cardType === CardTypeEnum.SPELL || c.cardType === CardTypeEnum.HERO) {
@@ -311,6 +344,11 @@ class TokenDruidDeck : DeckStrategy() {
                     } else {
                         if (me.playArea.isFull) break
                         playCardWithTargeting(c, me, rival)
+                    }
+                    // 费伍德树人：记录需转化永久水晶
+                    if (c.cardId == "CATA_131") {
+                        manaToFloatForPermanent = 4
+                        log.info { "费伍德树人: 开始转化永久水晶(需浮动4费)" }
                     }
                     used += c.actualCost(me, enemyMinions)
                     Thread.sleep(if (firstAction) (100..180).random().toLong() else (80..150).random().toLong())
@@ -345,14 +383,20 @@ class TokenDruidDeck : DeckStrategy() {
         // 8.5 兜底攻击
         postCleanUpAttacks(me, rival)
 
-        // 9. 贪婪填充
-        val updatedFreeSpace = 7 - me.playArea.cards.count { it.cardType == CardTypeEnum.MINION }
+        // 9. 贪婪填充：用尽剩余法力，但避免浪费buff
+        val curMinionCnt = me.playArea.cards.count { it.cardType == CardTypeEnum.MINION }
+        val updatedFreeSpace = 7 - curMinionCnt
         val hasTokensNow = me.playArea.cards.count {
             it.cardType == CardTypeEnum.MINION && it.atc <= 2
         } >= 2
         val remaining = me.handArea.cards.toList()
             .filter { !it.isCoinCard && it.actualCost(me, enemyMinions) <= me.usableResource }
-            .sortedByDescending { calcValue(it, me.usableResource, enemyMinions, me.playArea.cards.count { it.cardType == CardTypeEnum.MINION }, updatedFreeSpace, hasTokensNow, hasBuffInHand) }
+            .filter {
+                // 场面 ≤2 随从时不填充 buff 牌（留到后面用）
+                val k = KNOWN_CARD_MAP[it.cardId]
+                !(k?.isBuff == true && curMinionCnt <= 2)
+            }
+            .sortedByDescending { calcValue(it, me.usableResource, enemyMinions, curMinionCnt, updatedFreeSpace, hasTokensNow, hasBuffInHand) }
         if (remaining.isNotEmpty() && me.usableResource > 0) {
             log.info { "贪婪填充: 剩${me.usableResource}费 ${remaining.size}张" }
             for (c in remaining) {
@@ -377,15 +421,19 @@ class TokenDruidDeck : DeckStrategy() {
         plays = me.playArea.cards.toList()
         DeckStrategyUtil.activeLocation(plays)
 
-        // 11. 英雄技能
+        // 11. 英雄技能：剩余法力多时使用，或有1血敌方随从可咬
         heroPower?.let { p ->
             if (me.usableResource >= p.cost) {
-                val hasPlayable = me.handArea.cards.any {
+                val myCards = me.handArea.cards
+                val hasPlayable = myCards.any {
                     val ac = it.actualCost(me, enemyMinions)
                     ac <= me.usableResource &&
                         (it.cardType == CardTypeEnum.MINION || it.cardType == CardTypeEnum.SPELL)
                 }
-                if (!hasPlayable || me.usableResource >= p.cost + 3) {
+                // 有1血随从可咬 → 用技能解场
+                val hasPingTarget = enemyMinions.any { it.health <= 1 }
+                // 没牌出、剩余法力≥技能+1(会浪费法力)、或有值得咬的目标
+                if (!hasPlayable || me.usableResource >= p.cost + 1 || hasPingTarget) {
                     log.info { "英雄技能" }
                     p.action.power()
                     Thread.sleep((100..200).random().toLong())
@@ -398,6 +446,15 @@ class TokenDruidDeck : DeckStrategy() {
             if (c.isLaunchpad && me.usableResource >= c.launchCost()) {
                 c.action.launch()
                 Thread.sleep((80..150).random().toLong())
+            }
+        }
+
+        // 13. 永久水晶转化追踪：扣除本回合预留的法力
+        if (manaToFloatForPermanent > 0) {
+            val floated = reserveForPermanent + maxOf(0, me.usableResource)
+            manaToFloatForPermanent = maxOf(0, manaToFloatForPermanent - floated)
+            if (manaToFloatForPermanent == 0) {
+                log.info { "永久水晶转化完成!" }
             }
         }
     }
@@ -467,6 +524,47 @@ class TokenDruidDeck : DeckStrategy() {
                 log.info { "预清: ${small.entityName}→${enemy.entityName}(${enemy.atc}/${enemy.health})" }
                 small.action.attack(enemy)
                 Thread.sleep((80..150).random().toLong())
+            }
+        }
+    }
+
+    /** 柳牙专用清场：确保至少腾出5-当前随从数的格子 */
+    private fun preClearForWickerfang(me: Player, curMinionCnt: Int) {
+        val needToClear = curMinionCnt + 5 - 7  // 需要清掉的随从数
+        if (needToClear <= 0) return
+        val myMinions = me.playArea.cards
+            .filter { it.cardType == CardTypeEnum.MINION && it.atc > 0 && !it.isExhausted }
+            .sortedBy { it.atc * it.health }  // 先清最弱的
+        var cleared = 0
+        for (m in myMinions) {
+            if (cleared >= needToClear) break
+            val enemyTargets = WAR.rival.playArea.cards
+                .filter { it.cardType == CardTypeEnum.MINION && it.canBeTargetedByRivalSpells() }
+                .sortedByDescending { it.atc }
+            if (enemyTargets.isNotEmpty()) {
+                log.info { "柳牙清格: ${m.entityName}(${m.atc}/${m.health})→${enemyTargets[0].entityName}(${enemyTargets[0].atc}/${enemyTargets[0].health})" }
+                m.action.attack(enemyTargets[0])
+                Thread.sleep((80..150).random().toLong())
+            }
+            // 如果清完还是不够，可以考虑送掉蛋或低价值随从
+            val stillNeed = (me.playArea.cards.count { it.cardType == CardTypeEnum.MINION } - cleared - 1) + 5 - 7
+            if (stillNeed <= 0) break
+            cleared++
+        }
+        // 如果仍然不够格子，送掉0攻蛋
+        val stillToClear = me.playArea.cards.count { it.cardType == CardTypeEnum.MINION } + 5 - 7
+        if (stillToClear > 0) {
+            val eggs = me.playArea.cards
+                .filter { it.cardType == CardTypeEnum.MINION && it.atc == 0 }
+            for (egg in eggs.take(stillToClear)) {
+                val enemyTargets = WAR.rival.playArea.cards
+                    .filter { it.cardType == CardTypeEnum.MINION }
+                    .sortedByDescending { it.atc }
+                if (enemyTargets.isNotEmpty()) {
+                    log.info { "柳牙送蛋: ${egg.entityName}→${enemyTargets[0].entityName}" }
+                    egg.action.attack(enemyTargets[0])
+                    Thread.sleep((80..150).random().toLong())
+                }
             }
         }
     }
@@ -560,14 +658,32 @@ class TokenDruidDeck : DeckStrategy() {
             v += known.bonus
         }
 
-        // 跳费价值：越高费越不值（后期跳费意义小），低费阶段跳费价值极高
+        // 跳费价值：只在前中期有价值，且必须有可用的后续牌
         if (known?.isRamp == true) {
             val currentMana = WAR.me.usableResource
-            v += when {
-                currentMana <= 4 -> 8.0    // 前期跳费极其重要
-                currentMana <= 6 -> 5.0    // 中期仍有价值
-                currentMana <= 8 -> 2.5    // 后期价值降低
-                else -> 1.0
+            if (currentMana <= 6) {
+                val handCards = WAR.me.handArea.cards
+                // 检查手牌中是否有值得跳费出的牌（费用>当前可用法力 且 非跳费牌本身）
+                val hasFollowUp = handCards.any {
+                    it.cardId != c.cardId && it.actualCost(WAR.me, enemies) in (currentMana + 1)..(currentMana + 2)
+                }
+                v += when {
+                    currentMana <= 3 && hasFollowUp -> 8.0   // 前期有后续 → 极值
+                    currentMana <= 3 -> 4.0                   // 前期无后续 → 降值
+                    currentMana <= 5 && hasFollowUp -> 5.0   // 中期有后续
+                    currentMana <= 5 -> 2.0                   // 中期无后续
+                    else -> 1.5
+                }
+                // 费伍德树人：如果能获得永久法力水晶（预留法力转化），额外加分
+                if (c.cardId == "CATA_131") {
+                    // 检查是否有激活配合（激活+树人=双跳费）
+                    val hasInnervate = handCards.any { it.cardId == "CORE_EX1_169" }
+                    if (hasInnervate && currentMana <= 4) v += 3.0
+                    // 永久水晶转化价值：如果能在低费阶段转化，价值极高
+                    if (currentMana <= 5) v += 2.0  // 永久水晶的长期收益
+                }
+            } else {
+                v += 0.5  // 后期跳费几乎无用
             }
         }
 
@@ -575,7 +691,6 @@ class TokenDruidDeck : DeckStrategy() {
         if (c.cost > 0 && effectiveType == CardTypeEnum.MINION) {
             val stats = effectiveAtc + effectiveHealth
             v += stats.toDouble() / c.cost * 0.6
-            // 大身材绝对价值
             if (effectiveAtc >= 5) v += effectiveAtc * 0.2
             if (effectiveAtc + effectiveHealth >= 10) v += 1.0
         }
@@ -585,28 +700,59 @@ class TokenDruidDeck : DeckStrategy() {
             val tokens = known.tokensGenerated
             if (tokens > 0) {
                 val actualTokens = tokens.coerceAtMost(freeSpace)
-                v += actualTokens * 2.0  // 每个token基础价值
+                v += actualTokens * 2.0
                 if (actualTokens < tokens) {
-                    v -= (tokens - actualTokens) * 5.0  // 没法全部下场的惩罚
+                    v -= (tokens - actualTokens) * 5.0
                 }
             }
-            // 法术token牌在有空位时额外加分
             if (effectiveType == CardTypeEnum.SPELL && freeSpace >= 2) v += 1.5
-            // 荒林怪圈：亡语buff"每个随从死亡召唤2/2"价值 = 场上随从数 * 概率 * 2/2价值
             if (c.cardId == "CATA_134") {
-                v += myMinionCount * 1.8  // 每个随从获得亡语2/2，估值每个1.8
-                if (myMinionCount >= 3) v += 2.0  // 场面大时亡语协同更值钱
+                v += myMinionCount * 1.8
+                if (myMinionCount >= 3) v += 2.0
             }
+            // 铺场牌是 buff 的前置条件：手牌有 buff 时铺场价值提升
+            if (hasBuffInHand && freeSpace >= 2) v += 3.0
+            // 手上有buff且场上随从少→铺场更紧急
+            if (hasBuffInHand && myMinionCount < 3 && freeSpace >= 3) v += 2.0
         }
 
-        // 群体buff价值：随从越多越值钱
+        // 柳牙（CATA_139）终端评价
+        if (c.cardId == "CATA_139") {
+            // 空间不够 → 严重惩罚（巨型+4需要5格）
+            if (freeSpace < 5) {
+                v -= (5 - freeSpace) * 4.0  // 每缺1格扣4分
+            }
+            // 有荒林怪圈在场 → 协同加分（柳牙的腿死后触发亡语2/2）
+            if (WAR.me.playArea.cards.any { it.cardId == "CATA_134" }) {
+                v += 4.0
+            }
+            // 手上有buff → 柳牙铺满后可buff的协同价值
+            if (hasBuffInHand) v += 3.0
+            // 场上已有随从时，柳牙价值降低（占据格子）
+            if (myMinionCount >= 3) v -= (myMinionCount - 2) * 1.5
+            // 费用够出柳牙+预留激活/硬币 → 额外加分（能提前出）
+            if (mana >= c.cost && WAR.me.handArea.cards.any {
+                it.cardId == "CORE_EX1_169" || it.isCoinCard
+            }) v += 2.0
+        }
+
+        // 群体buff价值：随从数越多越值钱（铺场德核心：先铺后buff）
         if (known?.isBuff == true) {
-            val effectiveTargets = myMinionCount.coerceAtMost(7)
-            v += known.buffValue * effectiveTargets * 1.2
-            // 有铺场牌但没场面，buff价值低
-            if (myMinionCount <= 1 && c.cost >= 2) v -= 2.0
-            // 已有多铺场随从，buff价值高
-            if (hasTokensOnBoard && myMinionCount >= 3) v += 3.0
+            v += when {
+                myMinionCount >= 5 -> known.buffValue * myMinionCount * 1.8 + 5.0  // 满场buff极值
+                myMinionCount >= 4 -> known.buffValue * myMinionCount * 1.5 + 3.0
+                myMinionCount >= 3 -> known.buffValue * myMinionCount * 1.2 + 1.5
+                myMinionCount == 2 -> known.buffValue * 2.0  // 2随从buff勉强可用
+                myMinionCount == 1 -> -2.0                    // 1随从buff严重浪费
+                else -> -5.0                                  // 0随从buff是废牌
+            }
+            // 手牌有未使用的铺场牌时，buff应让位
+            val hasTokenInHand = WAR.me.handArea.cards.any {
+                val k = KNOWN_CARD_MAP[it.cardId]
+                k?.isTokenGenerator == true && it.cardId != c.cardId &&
+                    it.actualCost(WAR.me, enemies) <= mana
+            }
+            if (hasTokenInHand && myMinionCount < 3) v -= 3.0
         }
 
         // 过牌价值
@@ -765,16 +911,22 @@ class TokenDruidDeck : DeckStrategy() {
                 }
                 else -> known.chooseOneIndex
             }
+            val cardLabel = c.entityName.ifEmpty { c.cardId }
             val modeLabel = if (chosenIndex == 0) "打2" else "铺场"
-            log.info { "抉择: ${c.entityName}→${modeLabel}(index=${chosenIndex})" }
-            // 直接打出牌触发抉择 UI（不用 autoPower 避免 SDK 白动选）
-            c.action.power()
-            Thread.sleep((500..800).random().toLong())
-            val result = c.action.chooseOne(chosenIndex)
-            if (result == null) {
-                log.warn { "抉择选择失败: ${c.entityName} index=${chosenIndex}，重试" }
-                Thread.sleep((300..500).random().toLong())
-                c.action.chooseOne(chosenIndex)
+            log.info { "抉择: $cardLabel→$modeLabel(index=$chosenIndex) cardId=${c.cardId}" }
+            try {
+                // 直接打出牌触发抉择 UI（不用 autoPower 避免 SDK 自动选）
+                c.action.power()
+                Thread.sleep((500..800).random().toLong())
+                val result = c.action.chooseOne(chosenIndex)
+                if (result == null) {
+                    log.warn { "抉择选择失败: $cardLabel index=$chosenIndex，重试" }
+                    Thread.sleep((300..500).random().toLong())
+                    c.action.chooseOne(chosenIndex)
+                }
+            } catch (e: InterruptedException) {
+                log.warn { "抉择被中断: $cardLabel" }
+                Thread.currentThread().interrupt()
             }
             return
         }
@@ -832,15 +984,22 @@ class TokenDruidDeck : DeckStrategy() {
                 c.cost == 0 -> 0
                 // 5. 荒林怪圈：亡语buff协同，优先于一般铺场
                 c.cardId == "CATA_134" -> 3
-                // 6. 铺场token低费牌
-                known?.isTokenGenerator == true && c.cost <= 2 -> 5
-                known?.isTokenGenerator == true -> 10
+                // 6. 柳牙：后于荒林怪圈(协同)，先于一般token(需腾格子)
+                c.cardId == "CATA_139" -> 6
+                // 7. 铺场token低费牌
+                known?.isTokenGenerator == true && c.cost <= 2 -> 8
+                known?.isTokenGenerator == true -> 12
                 // 7. 低费战吼随从（栉龙抽牌等）
                 c.cost in 1..2 && c.isBattlecry -> 15
                 // 8. 过牌
                 known?.isDraw == true -> 20
-                // 9. buff牌（场面有随从时早出，无随从时晚出）
-                known?.isBuff == true -> if (hasTokensOnBoard) 12 else 40
+                // 9. buff牌：铺场德核心是先铺再buff，随从少时严格后置
+                known?.isBuff == true -> when {
+                    myMinionCount >= 4 -> 10   // ≥4随从 buff急出
+                    myMinionCount >= 3 -> 15   // 3随从 buff可出
+                    myMinionCount == 2 -> 30   // 2随从 buff勉强
+                    else -> 80                 // ≤1随从 buff不出（等铺场）
+                }
                 // 10. 随从
                 c.cardType == CardTypeEnum.MINION -> 30
                 // 11. 法术
