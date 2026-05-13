@@ -43,6 +43,7 @@ private data class KnownCardInfo(
     val targetsEnemy: Boolean = false,         // 目标为敌方（true=敌方, false=友方）
     val isChooseOne: Boolean = false,          // 抉择牌
     val chooseOneIndex: Int = 0,               // 抉择默认选项(0或1)
+    val triggersTimeline: Boolean = false,      // 触发时间线选择的卡牌（如时间之沙）
 )
 
 private val KNOWN_CARD_MAP: Map<String, KnownCardInfo> = mapOf(
@@ -79,6 +80,8 @@ private val KNOWN_CARD_MAP: Map<String, KnownCardInfo> = mapOf(
         isBattlecry = true, bonus = 2.0),
     "TIME_715" to KnownCardInfo(  // 为了荣耀！抽牌 动态费用
         cardType = CardTypeEnum.SPELL, bonus = 3.0, dynamicCostByEnemy = true),
+    "TIME_EVENT_999" to KnownCardInfo(  // 时间之沙 1费 触发时间线选择
+        cardType = CardTypeEnum.SPELL, bonus = 5.0, triggersTimeline = true),
     "DINO_434" to KnownCardInfo(  // 迅猛龙巢护工 1费2/3 野兽
         cardType = CardTypeEnum.MINION, atc = 2, health = 3,
         cardRace = CardRaceEnum.PET, bonus = 1.0),
@@ -315,6 +318,14 @@ class PartnerHunterDeck : DeckStrategy() {
             log.info { "DP消耗${used}费 剩${me.usableResource}费" }
         } else {
             log.info { "DP未选中牌" }
+        }
+
+        // 6.5 时间线检测：打出时间之沙等触发时间线的牌后，跳过后续操作
+        val hasTimelineTrigger = finalCards.any { KNOWN_CARD_MAP[it.card.cardId]?.triggersTimeline == true }
+        if (hasTimelineTrigger) {
+            log.info { "已打出时间线触发牌，跳过解场/清理，等待时间线处理" }
+            Thread.sleep((500..800).random().toLong())
+            return
         }
 
         // 7. 主动解场（hasLethal/nearLethal已在步骤2.1计算）
