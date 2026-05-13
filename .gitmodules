@@ -16,7 +16,7 @@
 	branch = master
 [submodule "hs-script-app"]
 	path = hs-script-app
-	url = https://github.com/xjw580/hs-script-app.git
+	url = https://github.com/Demon-0404/hs-script-app.git
 	branch = master
 [submodule "hs-script-base-strategy-plugin"]
 	path = hs-script-base-strategy-plugin
