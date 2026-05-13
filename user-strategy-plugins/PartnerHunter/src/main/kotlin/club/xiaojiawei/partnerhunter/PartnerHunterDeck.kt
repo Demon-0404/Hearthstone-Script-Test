@@ -44,6 +44,7 @@ private data class KnownCardInfo(
     val isChooseOne: Boolean = false,          // 抉择牌
     val chooseOneIndex: Int = 0,               // 抉择默认选项(0或1)
     val triggersTimeline: Boolean = false,      // 触发时间线选择的卡牌（如时间之沙）
+    val isDoubleBattlecry: Boolean = false,      // 让你的战吼触发两次（如游侠队长，应先出）
 )
 
 private val KNOWN_CARD_MAP: Map<String, KnownCardInfo> = mapOf(
@@ -82,6 +83,13 @@ private val KNOWN_CARD_MAP: Map<String, KnownCardInfo> = mapOf(
         cardType = CardTypeEnum.SPELL, bonus = 3.0, dynamicCostByEnemy = true),
     "TIME_EVENT_999" to KnownCardInfo(  // 时间之沙 1费 触发时间线选择
         cardType = CardTypeEnum.SPELL, bonus = 5.0, triggersTimeline = true),
+    "TIME_609t1" to KnownCardInfo(  // 游侠队长奥蕾莉亚 3费 战吼触发两次光环
+        cardType = CardTypeEnum.MINION, atc = 2, health = 4,
+        bonus = 2.0, isDoubleBattlecry = true),
+    "TIME_441" to KnownCardInfo(  // 永世裂痕 4费 回溯-随机对两个敌人造成4点伤害
+        cardType = CardTypeEnum.SPELL, bonus = 2.0),
+    "CORE_OG_211" to KnownCardInfo(  // 兽群呼唤 8费 升级动物伙伴
+        cardType = CardTypeEnum.SPELL, isUpgradeCompanion = true, bonus = 5.0),
     "DINO_434" to KnownCardInfo(  // 迅猛龙巢护工 1费2/3 野兽
         cardType = CardTypeEnum.MINION, atc = 2, health = 3,
         cardRace = CardRaceEnum.PET, bonus = 1.0),
@@ -437,24 +445,29 @@ class PartnerHunterDeck : DeckStrategy() {
             .filter { it.cardType == CardTypeEnum.MINION && it.atc > 0 && !it.isExhausted }
         if (myMinions.size < 2 || enemyMinions.isEmpty()) return
 
-        // 找最小代价交换：用小身材换大威胁
-        for (enemy in enemyMinions.sortedByDescending { it.atc }) {
+        // 优先处理未知随从(疑为嘲讽)和高攻威胁
+        val sortedEnemies = enemyMinions.sortedByDescending {
+            (if (it.cardType == CardTypeEnum.INVALID || it.isTaunt) 100 else 0) + it.atc
+        }
+        for (enemy in sortedEnemies) {
             val attackers = myMinions.filter { !it.isExhausted && it.atc > 0 }
             if (attackers.isEmpty()) break
 
-            // 用小怪换大怪
+            // 能用小怪换掉：攻击力≥血量即可击杀
             val small = attackers
-                .filter { it.atc <= 2 && it.health <= 3 }
+                .filter { it.atc <= 3 && it.atc >= enemy.health }
                 .minByOrNull { it.atc.toDouble() * it.health.toDouble() }
-            if (small != null && (enemy.atc >= 3 || enemy.isTaunt || enemy.cardType == CardTypeEnum.INVALID)) {
+            if (small != null && (enemy.atc >= 2 || enemy.isTaunt || enemy.cardType == CardTypeEnum.INVALID)) {
                 log.info { "预清空间: ${small.entityName}(${small.atc}/${small.health})→${enemy.entityName}(${enemy.atc}/${enemy.health})" }
                 small.action.attack(enemy)
                 Thread.sleep((80..150).random().toLong())
                 continue
             }
-            // 如果没有小怪但有能优势交换的
-            val favorable = attackers.minByOrNull { it.atc.toDouble() * it.health.toDouble() }
-            if (favorable != null && favorable.atc >= enemy.health && enemy.atc >= 3) {
+            // 能优势交换（攻击力≥血量 且 不被反杀）
+            val favorable = attackers
+                .filter { it.atc >= enemy.health && (it.health > enemy.atc || it.isDivineShield) }
+                .minByOrNull { it.atc.toDouble() * it.health.toDouble() }
+            if (favorable != null && enemy.atc >= 3) {
                 log.info { "预清空间: ${favorable.entityName}(${favorable.atc}/${favorable.health})→${enemy.entityName}(${enemy.atc}/${enemy.health})" }
                 favorable.action.attack(enemy)
                 Thread.sleep((80..150).random().toLong())
@@ -585,6 +598,9 @@ class PartnerHunterDeck : DeckStrategy() {
                 2 -> 8.0    // 更高费阶段
                 else -> 8.0
             }
+            // 高费升级牌额外奖励（如兽群呼唤8费 > 灵语猎手4费，效果更显著）
+            if (c.cost >= 6) v += 4.0
+            else if (c.cost >= 4) v += 2.0
             // 发现/生成类升级牌优先级加成
             if (isUpgradeByMap && known?.isBattlecry == true && known?.atc ?: 0 <= 3) {
                 v += 2.0  // 小身材战吼升级牌(如MEND_301灵语猎手)额外奖励
@@ -717,7 +733,10 @@ class PartnerHunterDeck : DeckStrategy() {
             .filter { it.cardType == CardTypeEnum.MINION && it.atc > 0 && !it.isExhausted }
         val enemyMinions = rival.playArea.cards
             .filter { it.cardType == CardTypeEnum.MINION }
-            .sortedByDescending { it.atc }
+            .sortedByDescending {
+                // 优先解未知随从(疑为嘲讽)和高攻随从
+                (if (it.cardType == CardTypeEnum.INVALID || it.isTaunt) 50 else 0) + it.atc
+            }
         if (myMinions.isEmpty() || enemyMinions.isEmpty()) return
 
         for (enemy in enemyMinions) {
@@ -732,24 +751,27 @@ class PartnerHunterDeck : DeckStrategy() {
                 if (a.atc >= enemy.health) score += 20.0
                 // 突袭/冲锋优先
                 if (a.isRush || a.isCharge) score += 10.0
-                // 小代价换大威胁更优
-                if (enemy.atc >= 4 && a.atc <= 2) score += 5.0
+                // 能击杀时小代价换大威胁
+                if (enemy.atc >= 4 && a.atc <= 2 && a.atc >= enemy.health) score += 5.0
                 // 野兽惩罚（保留野兽用于协同）
                 if (a.cardRace == CardRaceEnum.PET) score -= 3.0
                 // 嘲讽惩罚（保留墙）
                 if (a.isTaunt) score -= 5.0
+                // 不能击杀敌方时大幅惩罚（避免自杀式解场）
+                if (a.atc < enemy.health && !a.isPoisonous) score -= 15.0
                 if (score > bestScore) { bestScore = score; best = a }
             }
             val attacker = best ?: continue
 
-            // 提高解场阈值：敌方随从攻击力≥3才主动解
+            // 解场条件：必须能降低实际威胁
+            val canKill = attacker.atc >= enemy.health || attacker.isPoisonous
+            val isThreat = enemy.atc >= 3 || enemy.isTaunt || enemy.cardType == CardTypeEnum.INVALID
             val should = when {
-                attacker.atc >= 4 && enemy.atc <= 1 -> false
-                attacker.atc >= 3 && attacker.health <= 2 && enemy.atc >= 4 -> true
-                enemy.atc >= 3 -> true
-                attacker.isRush || attacker.isCharge -> true
-                attacker.atc <= 1 && attacker.health <= 2 && enemy.atc >= 3 -> true
-                attacker.atc >= 3 && enemy.atc >= attacker.health -> false
+                canKill && isThreat -> true    // 能击杀高威胁目标
+                canKill && (attacker.isRush || attacker.isCharge) -> true  // 突袭/冲锋能击杀
+                attacker.atc >= 4 && enemy.atc <= 1 -> false  // 大怪不浪费在小怪上
+                attacker.atc >= 3 && attacker.health <= 2 && enemy.atc >= 4 && canKill -> true  // 脆弱大怪换威胁
+                attacker.atc <= 1 && attacker.health <= 1 && enemy.atc >= 5 -> true  // 极低价值1/1换高攻怪(适当降场攻)
                 else -> false
             }
             if (should) {
@@ -808,11 +830,24 @@ class PartnerHunterDeck : DeckStrategy() {
     // ==================== 排序 ====================
 
     private fun sortCards(cards: List<SimulateWeightCard>): List<SimulateWeightCard> {
+        // 判断当前场面是否需要双倍战吼优先：敌方有≥2个随从或有高血量随从时，先出光环
+        val enemyBoard = WAR.rival.playArea.cards.filter { it.cardType == CardTypeEnum.MINION }
+        val needDoubleBattlecry = enemyBoard.isNotEmpty() && (
+            enemyBoard.size >= 2 || enemyBoard.any { it.health >= 3 }
+        )
+        val hasOtherBattlecry = cards.any {
+            val c = it.card
+            KNOWN_CARD_MAP[c.cardId]?.isDoubleBattlecry != true &&
+                (c.isBattlecry || (c.cost in 1..3 && c.atc <= 1))
+        }
+
         return cards.sortedBy { swc ->
             val c = swc.card
             val known = KNOWN_CARD_MAP[c.cardId]
             when {
-                known?.isUpgradeCompanion == true -> -5 // 升级牌绝对优先
+                // 场面有威胁且手中有其他战吼牌时，双倍战吼光环最高优先
+                known?.isDoubleBattlecry == true && needDoubleBattlecry && hasOtherBattlecry -> -10
+                known?.isUpgradeCompanion == true -> -5   // 升级牌绝对优先
                 c.cost == 0 -> 0
                 c.cardId == "EDR_853" -> 7               // 熊皮优先(需格子触发战吼)
                 c.cardType == CardTypeEnum.LOCATION -> 10
