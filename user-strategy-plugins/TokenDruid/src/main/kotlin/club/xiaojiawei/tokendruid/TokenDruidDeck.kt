@@ -117,6 +117,23 @@ private val KNOWN_CARD_MAP: Map<String, KnownCardInfo> = mapOf(
         cardType = CardTypeEnum.MINION, atc = 3, health = 5, isTaunt = true),
     "CORE_ICC_807" to KnownCardInfo(  // 固守卫兵 1费1/3 嘲讽
         cardType = CardTypeEnum.MINION, atc = 1, health = 3, isTaunt = true),
+    // --- 圣骑士时序光环/奇闻相关嘲讽 ---
+    "TIME_321" to KnownCardInfo(  // 奇闻光环可能赋予嘲讽的随从
+        cardType = CardTypeEnum.MINION, isTaunt = true),
+    "TIME_433" to KnownCardInfo(  // 时序光环相关
+        cardType = CardTypeEnum.MINION, isTaunt = true),
+    "CORE_DRG_237" to KnownCardInfo(  // 庇护 2费2/4 龙 嘲讽
+        cardType = CardTypeEnum.MINION, atc = 2, health = 4,
+        cardRace = CardRaceEnum.DRAGON, isTaunt = true),
+    "CORE_CS2_188" to KnownCardInfo(  // 阿曼尼狂战士 2费2/3 → 激怒后可能嘲讽
+        cardType = CardTypeEnum.MINION, atc = 2, health = 3),
+    "CORE_CS2_179" to KnownCardInfo(  // 森金持盾卫士 4费3/5 嘲讽 (别名)
+        cardType = CardTypeEnum.MINION, atc = 3, health = 5, isTaunt = true),
+    // --- 龙巢/发现相关嘲讽 ---
+    "CATA_469" to KnownCardInfo(  // 多彩龙巢母 - 如果赋予嘲讽
+        cardType = CardTypeEnum.MINION),
+    "TLC_600" to KnownCardInfo(  // 乘风浮龙 - 可能获得嘲讽
+        cardType = CardTypeEnum.MINION),
 )
 
 // ==================== 铺场德-v1 策略主类 ====================
@@ -575,6 +592,11 @@ class TokenDruidDeck : DeckStrategy() {
             }
             // 法术token牌在有空位时额外加分
             if (effectiveType == CardTypeEnum.SPELL && freeSpace >= 2) v += 1.5
+            // 荒林怪圈：亡语buff"每个随从死亡召唤2/2"价值 = 场上随从数 * 概率 * 2/2价值
+            if (c.cardId == "CATA_134") {
+                v += myMinionCount * 1.8  // 每个随从获得亡语2/2，估值每个1.8
+                if (myMinionCount >= 3) v += 2.0  // 场面大时亡语协同更值钱
+            }
         }
 
         // 群体buff价值：随从越多越值钱
@@ -729,11 +751,31 @@ class TokenDruidDeck : DeckStrategy() {
         val cardInfo = CARD_DATA_TRIE[c.cardId]
         val known = KNOWN_CARD_MAP[c.cardId]
 
-        // 抉择牌
+        // 抉择牌：根据场面动态选择模式
+        // 注意: 不能使用 autoPower(cardInfo)，因为 SDK 解析的行动会跳过抉择 UI
         if (known?.isChooseOne == true) {
+            val chosenIndex = when (c.cardId) {
+                // 活体根须：敌方有低血威胁(≤2血 且 ≥3攻 或嘲讽)→打2解场，否则铺场
+                "CORE_AT_037" -> {
+                    val weakThreats = rival.playArea.cards.filter {
+                        it.cardType == CardTypeEnum.MINION && it.health <= 2 &&
+                            (it.atc >= 3 || it.isEnemyTauntLike())
+                    }
+                    if (weakThreats.isNotEmpty()) 0 else 1
+                }
+                else -> known.chooseOneIndex
+            }
+            val modeLabel = if (chosenIndex == 0) "打2" else "铺场"
+            log.info { "抉择: ${c.entityName}→${modeLabel}(index=${chosenIndex})" }
+            // 直接打出牌触发抉择 UI（不用 autoPower 避免 SDK 白动选）
             c.action.power()
-            Thread.sleep((200..350).random().toLong())
-            c.action.chooseOne(known.chooseOneIndex)
+            Thread.sleep((500..800).random().toLong())
+            val result = c.action.chooseOne(chosenIndex)
+            if (result == null) {
+                log.warn { "抉择选择失败: ${c.entityName} index=${chosenIndex}，重试" }
+                Thread.sleep((300..500).random().toLong())
+                c.action.chooseOne(chosenIndex)
+            }
             return
         }
 
@@ -745,11 +787,10 @@ class TokenDruidDeck : DeckStrategy() {
                 me.playArea.cards.filter { it.cardType == CardTypeEnum.MINION && it.canBeTargetedByMySpells() }
             }
             if (targets.isNotEmpty()) {
-                // 友方目标：优先选低攻高血（变成5/4最赚）
+                // 奔行豹面具：选低攻高血随从（变成5/4最赚）
                 val target = if (known.targetsEnemy) {
                     targets.maxByOrNull { it.atc * 2 + it.health }
                 } else {
-                    // 奔行豹面具：选低攻高血随从（变成5/4最赚）
                     targets.filter { it.atc <= 3 && it.health >= 3 }
                         .maxByOrNull { it.health - it.atc }
                         ?: targets.maxByOrNull { it.health - it.atc }
@@ -789,18 +830,20 @@ class TokenDruidDeck : DeckStrategy() {
                 c.cardId in setOf("CATA_210", "DINO_130") -> -2
                 // 4. 费用0
                 c.cost == 0 -> 0
-                // 5. 铺场token低费牌
+                // 5. 荒林怪圈：亡语buff协同，优先于一般铺场
+                c.cardId == "CATA_134" -> 3
+                // 6. 铺场token低费牌
                 known?.isTokenGenerator == true && c.cost <= 2 -> 5
                 known?.isTokenGenerator == true -> 10
-                // 6. 低费战吼随从（栉龙抽牌等）
+                // 7. 低费战吼随从（栉龙抽牌等）
                 c.cost in 1..2 && c.isBattlecry -> 15
-                // 7. 过牌
+                // 8. 过牌
                 known?.isDraw == true -> 20
-                // 8. buff牌（场面有随从时早出，无随从时晚出）
+                // 9. buff牌（场面有随从时早出，无随从时晚出）
                 known?.isBuff == true -> if (hasTokensOnBoard) 12 else 40
-                // 9. 随从
+                // 10. 随从
                 c.cardType == CardTypeEnum.MINION -> 30
-                // 10. 法术
+                // 11. 法术
                 c.cardType == CardTypeEnum.SPELL -> 50
                 else -> 100
             }
