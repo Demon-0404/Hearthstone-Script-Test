@@ -248,16 +248,30 @@ class FaceHunterDeck : DeckStrategy() {
         val handSize = me.handArea.cards.size
         log.info { "=== ${me.usableResource}费 手牌${handSize} 我方${myMinionCount}随从(空${freeSpace}格) 敌${enemyMinions.size}个(攻${enemyAtk}) ===" }
 
-        // 1.5 先攻后铺：现有随从先打脸（伤害前置，防止先出牌后攻击的伏笔）
+        // 1.5 先攻后铺：现有随从先打脸/解关键嘲讽（伤害前置）
         val existingMinions = me.playArea.cards.filter {
             it.cardType == CardTypeEnum.MINION && it.atc > 0 && !it.isExhausted
         }
-        if (existingMinions.isNotEmpty() && enemyTaunts.isEmpty()) {
-            val rivalHero = rival.playArea.hero
-            if (rivalHero != null) {
-                for (m in existingMinions.sortedByDescending { it.atc }) {
-                    log.info { "先攻打脸: ${m.entityName}(${m.atc}/${m.health})→敌方英雄" }
-                    m.action.attack(rivalHero)
+        if (existingMinions.isNotEmpty()) {
+            if (enemyTaunts.isEmpty()) {
+                val rivalHero = rival.playArea.hero
+                if (rivalHero != null) {
+                    for (m in existingMinions.sortedByDescending { it.atc }) {
+                        log.info { "先攻打脸: ${m.entityName}(${m.atc}/${m.health})→敌方英雄" }
+                        m.action.attack(rivalHero)
+                        Thread.sleep((80..150).random().toLong())
+                    }
+                }
+            } else {
+                // 有嘲讽：用最弱能杀的随从解最弱嘲讽，腾出打脸通道
+                val weakTaunt = enemyTaunts.minByOrNull { it.health }
+                val killer = existingMinions
+                    .filter { it.atc >= (weakTaunt?.health ?: 99) }
+                    .minByOrNull { it.atc }
+                    ?: existingMinions.maxByOrNull { it.atc } // 杀不掉也要削血
+                if (killer != null && weakTaunt != null) {
+                    log.info { "先攻解嘲讽: ${killer.entityName}(${killer.atc})→${weakTaunt.entityName}(${weakTaunt.health})" }
+                    killer.action.attack(weakTaunt)
                     Thread.sleep((80..150).random().toLong())
                 }
             }
@@ -343,6 +357,29 @@ class FaceHunterDeck : DeckStrategy() {
                         else (80..150).random().toLong()
                     Thread.sleep(waitMs)
                     firstAction = false
+                    // 冲锋/突袭随从立即攻击（打出后先攻再继续出牌）
+                    if (c.cardType == CardTypeEnum.MINION && (c.isCharge || c.isRush)) {
+                        val justPlayed = me.playArea.cards
+                            .filter { it.cardType == CardTypeEnum.MINION && it.atc > 0 && !it.isExhausted }
+                            .maxByOrNull { it.atc }
+                        if (justPlayed != null) {
+                            val nowTaunts = rival.playArea.cards.filter { it.cardType == CardTypeEnum.MINION && it.isEnemyTauntLike() }
+                            if (nowTaunts.isEmpty()) {
+                                rival.playArea.hero?.let { h ->
+                                    log.info { "冲锋打脸: ${justPlayed.entityName}(${justPlayed.atc})→敌方英雄" }
+                                    justPlayed.action.attack(h)
+                                    Thread.sleep((80..150).random().toLong())
+                                }
+                            } else {
+                                val t = nowTaunts.minByOrNull { it.health }
+                                if (t != null) {
+                                    log.info { "突击解嘲: ${justPlayed.entityName}→${t.entityName}" }
+                                    justPlayed.action.attack(t)
+                                    Thread.sleep((80..150).random().toLong())
+                                }
+                            }
+                        }
+                    }
                     // 打出时间线触发牌后停止继续出牌（等时间线选择）
                     if (known?.triggersTimeline == true) {
                         log.info { "打出时间线牌，停止后续出牌" }
@@ -373,8 +410,13 @@ class FaceHunterDeck : DeckStrategy() {
             return
         }
 
-        // 7. cleanPlay（通用解场 — 处理先攻后剩余的场面）
-        DeckStrategyUtil.cleanPlay()
+        // 7. cleanPlay — 快攻猎只在有嘲讽时解场，无嘲讽优先打脸
+        val hasRemainingTaunts = rival.playArea.cards.any {
+            it.cardType == CardTypeEnum.MINION && !it.isExhausted && it.isEnemyTauntLike()
+        }
+        if (hasRemainingTaunts) {
+            DeckStrategyUtil.cleanPlay()
+        }
 
         // 8. 地标激活
         DeckStrategyUtil.activeLocation(me.playArea.cards.toList())
@@ -463,14 +505,15 @@ class FaceHunterDeck : DeckStrategy() {
         val handDirectDmg = me.handArea.cards
             .filter { KNOWN_CARD_MAP[it.cardId]?.isDirectDamage == true && it.actualCost(me, emptyList()) <= me.usableResource }
             .sumOf { KNOWN_CARD_MAP[it.cardId]?.directDamageValue ?: 0 }
-        val heroPowerDmg = if (me.usableResource >= 2 && me.playArea.power != null) 2 else 0
+        val heroPowerCost = me.playArea.power?.cost ?: 2
+        val heroPowerDmg = if (me.usableResource >= heroPowerCost && me.playArea.power != null) 2 else 0
         return myAtk + handDirectDmg + heroPowerDmg >= rivalHp && !hasTaunt
     }
 
     // ==================== 嘲讽检测 ====================
 
     private fun Card.isEnemyTauntLike(): Boolean {
-        return isTaunt || cardType == CardTypeEnum.INVALID || KNOWN_CARD_MAP[cardId]?.isTaunt == true
+        return isTaunt || KNOWN_CARD_MAP[cardId]?.isTaunt == true
     }
 
     // ==================== 清理嘲讽 ====================
@@ -665,8 +708,8 @@ class FaceHunterDeck : DeckStrategy() {
             val c = swc.card
             val known = KNOWN_CARD_MAP[c.cardId]
             when {
-                // 1. 时间之沙（最先）
-                known?.triggersTimeline == true -> -10
+                // 1. 时间之沙（最后出牌，避免break阻断后续出牌）
+                known?.triggersTimeline == true -> 40
                 // 2. 0费牌
                 c.cost == 0 -> -5
                 // 3. 1费随从（抢先铺场）
@@ -807,8 +850,41 @@ class FaceHunterDeck : DeckStrategy() {
         val known = KNOWN_CARD_MAP[c.cardId]
         val cardInfo = CARD_DATA_TRIE[c.cardId]
 
-        // 指向性卡牌：手动选目标
+        // CATA_557第二张→AOE全体敌人，无需指向
+        if (known?.isSecondCopyUpgrade == true) {
+            val graveCount = WAR.me.graveyardArea?.cards?.count { it.cardId == c.cardId } ?: 0
+            if (graveCount >= 1) {
+                log.info { "AOE直伤(第二张): ${c.entityName.ifEmpty { c.cardId }} → 全体敌人" }
+                c.action.power()
+                return
+            }
+        }
+
+        // 指向性卡牌：手动选目标（快攻猎直伤优先打脸）
         if (known?.needsTargeting == true) {
+            // 直伤牌：优先打脸，除非有嘲讽需解
+            if (known.isDirectDamage) {
+                val taunts = rival.playArea.cards.filter {
+                    it.cardType == CardTypeEnum.MINION && it.isEnemyTauntLike()
+                        && it.canBeTargetedByRivalSpells()
+                }
+                if (taunts.isEmpty()) {
+                    rival.playArea.hero?.let { h ->
+                        log.info { "直伤打脸: ${c.entityName.ifEmpty { c.cardId }}" }
+                        c.action.power(h)
+                        return
+                    }
+                } else {
+                    // 有嘲讽→直伤解最弱嘲讽为随从清路
+                    val best = taunts.filter { it.health <= known.directDamageValue }
+                        .minByOrNull { it.health } ?: taunts.minByOrNull { it.health }
+                    if (best != null) {
+                        log.info { "直伤解嘲讽: ${c.entityName.ifEmpty { c.cardId }}→${best.entityName}" }
+                        c.action.power(best)
+                        return
+                    }
+                }
+            }
             val targets = if (known.targetsEnemy) {
                 rival.playArea.cards.filter { it.cardType == CardTypeEnum.MINION && it.canBeTargetedByRivalSpells() }
             } else {
