@@ -14,7 +14,7 @@ import club.xiaojiawei.hsscriptcardsdk.status.WAR
 import club.xiaojiawei.hsscriptstrategysdk.DeckStrategy
 import club.xiaojiawei.hsscriptstrategysdk.TimelineEvent
 
-// ==================== 已知卡牌覆盖 ====================
+// ==================== 已知卡牌覆盖（效果均已查证） ====================
 
 private data class KnownCardInfo(
     // 基础属性覆盖（INVALID卡牌用）
@@ -25,105 +25,111 @@ private data class KnownCardInfo(
     val isBattlecry: Boolean = false,
     val isTaunt: Boolean = false,
     val isRush: Boolean = false,
-    val isCharge: Boolean = false,
-    val isPoisonous: Boolean = false,
-    val isLifesteal: Boolean = false,
     val isDivineShield: Boolean = false,
-    val isReborn: Boolean = false,
     val isElusive: Boolean = false,
+    val isDeathrattle: Boolean = false,
     val bonus: Double = 0.0,
     // 快攻猎专属
-    val isDirectDamage: Boolean = false,       // 直伤法术 (打脸)
+    val isDirectDamage: Boolean = false,       // 直伤法术/随从战吼
     val directDamageValue: Int = 0,            // 直伤数值
     val isFaceMinion: Boolean = false,          // 适合抢脸的随从
-    val isBoardBuff: Boolean = false,           // 群体buff (希尔瓦娜斯的胜利)
-    val buffAttack: Int = 0,                   // buff攻击力增量
     val isDraw: Boolean = false,               // 过牌/发现
     val drawCount: Int = 0,                    // 过牌数量
-    val isTokenGenerator: Boolean = false,     // 召唤token
-    val tokensGenerated: Int = 0,             // token数量
-    val needsTargeting: Boolean = false,       // 需要手动指向
-    val targetsEnemy: Boolean = false,         // 指向敌方
-    val triggersTimeline: Boolean = false,     // 触发时间线选择
-    val endOfTurnValue: Double = 0.0,          // 回合结束效果
-    val isFreeze: Boolean = false,             // 冻结效果 (冰川裂片)
-    val needsSpace: Int? = null,              // 需要格子数(null=默认:随从1/法术0)
+    val drawUntilHandSize: Int = 0,            // 抽牌直到此手牌数(TIME_601)
+    val isFreeze: Boolean = false,             // 冻结(冰川裂片)
+    val givesStone: Boolean = false,           // 给打3石头(TLC_427)
+    val stoneDamage: Int = 0,                  // 石头伤害(TLC_427=3)
+    val isReplay1Cost: Boolean = false,        // 重放用过1费牌(CATA_560)
+    val isSecondCopyUpgrade: Boolean = false,   // 第二张复制变AOE(CATA_557)
+    val positionalBonus: Boolean = false,       // 手牌正中加伤(TIME_600)
+    val positionalBonusDamage: Int = 0,         // 位置加伤后总伤害
+    val isZeroHpEnabler: Boolean = false,       // 手牌≤3时英雄技能0费(TIME_606)
+    val isSisterCard: Boolean = false,          // 三姐妹之一
+    val sisterPriority: Int = 0,               // 打出顺序 1=奥蕾莉亚 2=温蕾萨 3=希尔瓦娜斯
+    val needsTargeting: Boolean = false,        // 需要手动指向
+    val targetsEnemy: Boolean = false,          // 指向敌方
+    val triggersTimeline: Boolean = false,      // 触发时间线选择
+    val needsSpace: Int? = null,               // 需要的格子数
 )
 
 private val KNOWN_CARD_MAP: Map<String, KnownCardInfo> = mapOf(
-    // --- 1费随从 ---
+    // ===== 1费随从 (6张) =====
     "CORE_UNG_205" to KnownCardInfo(  // 冰川裂片 1费2/1 战吼：冻结一个敌人
         cardType = CardTypeEnum.MINION, atc = 2, health = 1,
-        isBattlecry = true, isFaceMinion = true, isFreeze = true, bonus = 1.5),
-    "TIME_606" to KnownCardInfo(  // 奎尔多雷造箭师 1费1/2 战吼：使你手牌中的随从+1/+1
-        cardType = CardTypeEnum.MINION, atc = 1, health = 2,
-        isBattlecry = true, isFaceMinion = true, bonus = 2.0),
-    "DINO_434" to KnownCardInfo(  // 迅猛龙巢护工 1费2/3 野兽
-        cardType = CardTypeEnum.MINION, atc = 2, health = 3,
-        cardRace = CardRaceEnum.PET, isFaceMinion = true, bonus = 2.0),
-    "CATA_558" to KnownCardInfo(  // 进击的募援官 1费2/1 战吼：召唤一个1/1的募援官
+        isBattlecry = true, isFreeze = true, isFaceMinion = true, bonus = 1.5),
+    "TIME_606" to KnownCardInfo(  // 奎尔多雷造箭师 1费1/3 手牌≤3时英雄技能消耗=0
+        cardType = CardTypeEnum.MINION, atc = 1, health = 3,
+        isZeroHpEnabler = true, isFaceMinion = true, bonus = 3.0),
+    "DINO_434" to KnownCardInfo(  // 迅猛龙巢护工 1费1/1 野兽 战吼给1费随从 亡语给1费法术
+        cardType = CardTypeEnum.MINION, atc = 1, health = 1,
+        cardRace = CardRaceEnum.PET, isBattlecry = true, isDeathrattle = true,
+        isDraw = true, drawCount = 1, isFaceMinion = true, bonus = 2.0),
+    "CATA_558" to KnownCardInfo(  // 进击的募援官 1费2/2 扰魔
+        cardType = CardTypeEnum.MINION, atc = 2, health = 2,
+        isElusive = true, isFaceMinion = true, bonus = 2.5),
+    "TLC_249" to KnownCardInfo(  // 炽烈烬火 1费2/1 元素 亡语：随机打2分配给敌人
         cardType = CardTypeEnum.MINION, atc = 2, health = 1,
-        isBattlecry = true, isTokenGenerator = true, tokensGenerated = 1,
+        isDeathrattle = true, isDirectDamage = true, directDamageValue = 2,
         isFaceMinion = true, bonus = 2.5),
-    "TLC_249" to KnownCardInfo(  // 炽烈烬火 1费2/1 亡语：对所有敌人造成1点伤害
-        cardType = CardTypeEnum.MINION, atc = 2, health = 1,
-        isFaceMinion = true, bonus = 2.0),
-    // --- 1费法术 ---
+    // ===== 1费法术 (4张) =====
     "CORE_DS1_185" to KnownCardInfo(  // 奥术射击 1费 造成2点伤害
         cardType = CardTypeEnum.SPELL, isDirectDamage = true, directDamageValue = 2, bonus = 2.0),
-    "CORE_BAR_801" to KnownCardInfo(  // 击伤猎物 1费 对一个随从造成1点伤害，抽一张野兽牌
-        cardType = CardTypeEnum.SPELL, needsTargeting = true, targetsEnemy = true,
-        isDirectDamage = true, directDamageValue = 1, isDraw = true, drawCount = 1, bonus = 1.5),
-    "CORE_DS1_184" to KnownCardInfo(  // 追踪术 1费 发现你牌库中的一张牌
+    "CORE_BAR_801" to KnownCardInfo(  // 击伤猎物 1费 造成1点伤害+召唤1/1突袭土狼
+        cardType = CardTypeEnum.SPELL, isDirectDamage = true, directDamageValue = 1,
+        needsTargeting = true, targetsEnemy = true, bonus = 2.0),
+    "CORE_DS1_184" to KnownCardInfo(  // 追踪术 1费 从牌库发现一张牌
         cardType = CardTypeEnum.SPELL, isDraw = true, drawCount = 1, bonus = 1.5),
     "TIME_EVENT_999" to KnownCardInfo(  // 时间之沙 1费 触发时间线选择
         cardType = CardTypeEnum.SPELL, triggersTimeline = true, bonus = 5.0),
-    // --- 2费随从 ---
-    "TLC_427" to KnownCardInfo(  // 抛石鱼人 2费2/3 鱼人 战吼：造成1-2点伤害(随机敌人)
-        cardType = CardTypeEnum.MINION, atc = 2, health = 3,
+    // ===== 2费随从 (2张) =====
+    "TLC_427" to KnownCardInfo(  // 抛石鱼人 2费1/3 鱼人 战吼：获取1费打3石头
+        cardType = CardTypeEnum.MINION, atc = 1, health = 3,
         cardRace = CardRaceEnum.UNKNOWN, isBattlecry = true,
-        isFaceMinion = true, bonus = 1.8),
-    "TIME_601" to KnownCardInfo(  // 拾箭龙鹰 2费2/2 野兽 战吼：可重复使用英雄技能
+        givesStone = true, stoneDamage = 3,
+        isFaceMinion = true, bonus = 2.0),
+    "TIME_601" to KnownCardInfo(  // 拾箭龙鹰 2费2/2 野兽 战吼：抽牌直到手牌=3
         cardType = CardTypeEnum.MINION, atc = 2, health = 2,
         cardRace = CardRaceEnum.PET, isBattlecry = true,
+        isDraw = true, drawUntilHandSize = 3,
         isFaceMinion = true, bonus = 1.5),
-    // --- 2费法术 ---
-    "CATA_557" to KnownCardInfo(  // 希尔瓦娜斯的胜利 2费 使你的随从获得+2攻击力
-        cardType = CardTypeEnum.SPELL, isBoardBuff = true, buffAttack = 2, bonus = 2.5),
-    "TIME_600" to KnownCardInfo(  // 精确射击 2费 造成3点伤害(敌方有随从可重复)
-        cardType = CardTypeEnum.SPELL, isDirectDamage = true, directDamageValue = 3, bonus = 2.5),
-    // --- 3费随从 ---
-    "TIME_609" to KnownCardInfo(  // 游侠将军希尔瓦娜斯 3费2/4 战吼AOE2 奇闻
+    // ===== 2费法术 (2张) =====
+    "CATA_557" to KnownCardInfo(  // 希尔瓦娜斯的胜利 2费 造成3点伤害；使用过复制则改为对所有敌人
+        cardType = CardTypeEnum.SPELL, isDirectDamage = true, directDamageValue = 3,
+        isSecondCopyUpgrade = true, needsTargeting = true, targetsEnemy = true, bonus = 2.5),
+    "TIME_600" to KnownCardInfo(  // 精确射击 2费 造成3点伤害（手牌正中则5点）
+        cardType = CardTypeEnum.SPELL, isDirectDamage = true, directDamageValue = 3,
+        positionalBonus = true, positionalBonusDamage = 5, bonus = 3.0),
+    // ===== 3费随从 — 三姐妹(3张，希尔瓦娜斯卡牌本身只带1张，奇闻自动洗入t1/t2) =====
+    "TIME_609" to KnownCardInfo(  // 游侠将军希尔瓦娜斯 3费2/4 战吼：AOE打2；每用过一姐妹重复一次
         cardType = CardTypeEnum.MINION, atc = 2, health = 4,
-        isBattlecry = true, isFaceMinion = true, bonus = 2.5),
-    "TIME_609t1" to KnownCardInfo(  // 游侠队长奥蕾莉亚 3费2/4 战吼触发两次
+        isBattlecry = true, isDirectDamage = true, directDamageValue = 2,
+        isSisterCard = true, sisterPriority = 3,
+        isFaceMinion = true, bonus = 3.0),
+    "TIME_609t1" to KnownCardInfo(  // 游侠队长奥蕾莉亚 3费2/4 战吼：发现法术；每用过一姐妹重复
         cardType = CardTypeEnum.MINION, atc = 2, health = 4,
-        isBattlecry = true, isFaceMinion = true, bonus = 2.5),
-    "TIME_609t2" to KnownCardInfo(  // 游侠新兵温蕾萨 3费2/4
+        isBattlecry = true, isDraw = true, drawCount = 1,
+        isSisterCard = true, sisterPriority = 1,
+        isFaceMinion = true, bonus = 2.5),
+    "TIME_609t2" to KnownCardInfo(  // 游侠新兵温蕾萨 3费2/4 战吼：牌库随从+1/+1；每用过一姐妹重复
         cardType = CardTypeEnum.MINION, atc = 2, health = 4,
+        isBattlecry = true,
+        isSisterCard = true, sisterPriority = 2,
         isFaceMinion = true, bonus = 2.0),
-    // --- 3费法术 ---
-    "CATA_560" to KnownCardInfo(  // 直面托维尔 3费 使你的随从+1/+1，随机召唤一个3费随从
-        cardType = CardTypeEnum.SPELL, isBoardBuff = true, buffAttack = 1,
-        isTokenGenerator = true, tokensGenerated = 1, bonus = 3.0),
-    // --- 常见敌方嘲讽 ---
-    "CORE_GVG_085" to KnownCardInfo(  // 吵吵机器人 2费1/2 圣盾嘲讽
-        cardType = CardTypeEnum.MINION, atc = 1, health = 2,
-        isTaunt = true, isDivineShield = true),
-    "CORE_BOT_911" to KnownCardInfo(  // 青铜门卫 3费1/5 磁力嘲讽
-        cardType = CardTypeEnum.MINION, atc = 1, health = 5, isTaunt = true),
-    "CORE_EX1_048" to KnownCardInfo(  // 森金持盾卫士 4费3/5 嘲讽
-        cardType = CardTypeEnum.MINION, atc = 3, health = 5, isTaunt = true),
-    "CORE_ICC_807" to KnownCardInfo(  // 固守卫兵 1费1/3 嘲讽
-        cardType = CardTypeEnum.MINION, atc = 1, health = 3, isTaunt = true),
-    "CORE_DRG_237" to KnownCardInfo(  // 庇护 2费2/4 龙 嘲讽
-        cardType = CardTypeEnum.MINION, atc = 2, health = 4,
-        cardRace = CardRaceEnum.DRAGON, isTaunt = true),
-    "CORE_OG_218" to KnownCardInfo(  // 血蹄勇士 4费2/6 嘲讽
-        cardType = CardTypeEnum.MINION, atc = 2, health = 6, isTaunt = true),
-    "CORE_TRL_401" to KnownCardInfo(  // 阿曼尼战熊 7费5/7 突袭嘲讽
-        cardType = CardTypeEnum.MINION, atc = 5, health = 7,
-        isTaunt = true, isRush = true),
+    // ===== 3费法术 (1张) =====
+    "CATA_560" to KnownCardInfo(  // 直面托维尔 3费 重放本局对战中使用过的所有1费牌
+        cardType = CardTypeEnum.SPELL, isReplay1Cost = true, bonus = 4.0),
+    // ===== 常见敌方嘲讽 =====
+    "CORE_GVG_085" to KnownCardInfo(cardType = CardTypeEnum.MINION, atc = 1, health = 2, isTaunt = true, isDivineShield = true),
+    "CORE_BOT_911" to KnownCardInfo(cardType = CardTypeEnum.MINION, atc = 1, health = 5, isTaunt = true),
+    "CORE_EX1_048" to KnownCardInfo(cardType = CardTypeEnum.MINION, atc = 3, health = 5, isTaunt = true),
+    "CORE_ICC_807" to KnownCardInfo(cardType = CardTypeEnum.MINION, atc = 1, health = 3, isTaunt = true),
+    "CORE_DRG_237" to KnownCardInfo(cardType = CardTypeEnum.MINION, atc = 2, health = 4, cardRace = CardRaceEnum.DRAGON, isTaunt = true),
+    "CORE_OG_218" to KnownCardInfo(cardType = CardTypeEnum.MINION, atc = 2, health = 6, isTaunt = true),
+    "CORE_TRL_401" to KnownCardInfo(cardType = CardTypeEnum.MINION, atc = 5, health = 7, isTaunt = true, isRush = true),
+    // ===== 外部生成牌（低价值标记） =====
+    "CATA_136" to KnownCardInfo(cardType = CardTypeEnum.SPELL, bonus = -3.0),
+    "CORE_LOOT_309" to KnownCardInfo(cardType = CardTypeEnum.SPELL, bonus = -3.0),
+    "CORE_EX1_169" to KnownCardInfo(cardType = CardTypeEnum.SPELL, bonus = -3.0),
 )
 
 // ==================== 快攻猎-v1 策略主类 ====================
@@ -133,7 +139,7 @@ class FaceHunterDeck : DeckStrategy() {
     override fun name(): String = "快攻猎-v1"
 
     override fun description(): String =
-        "快攻猎v1：极限抢脸+直伤斩杀+低费铺场+英雄技能节奏+三姐妹协同"
+        "快攻猎v1：0费射箭引擎(造箭师)+1费重放(直面托维尔)+三姐妹协同+直伤斩杀"
 
     override fun getRunMode(): Array<RunModeEnum> =
         arrayOf(RunModeEnum.STANDARD, RunModeEnum.WILD, RunModeEnum.CASUAL, RunModeEnum.PRACTICE)
@@ -166,26 +172,37 @@ class FaceHunterDeck : DeckStrategy() {
 
         // 1费随从最优
         if (card.cost == 1 && card.cardType == CardTypeEnum.MINION) {
-            score += 0.6
+            // 奎尔多雷造箭师(0费射箭引擎)最高优先级
+            if (card.cardId == "TIME_606") score += 1.0
+            else score += 0.6
             if (known?.isFaceMinion == true) score += 0.2
-            if (known?.isTokenGenerator == true) score += 0.15
+            if (known?.isElusive == true) score += 0.1  // 扰魔难解
+            if (known?.isDeathrattle == true) score += 0.1  // 亡语多价值
         }
         // 2费随从
         if (card.cost == 2 && card.cardType == CardTypeEnum.MINION) {
             score += 0.4
-            if (isGoingFirst) score += 0.1  // 先手2费曲线更重要
+            if (isGoingFirst) score += 0.1
+            // TIME_601在手牌少时好（加速抽牌）
+            if (known?.drawUntilHandSize == 3) score += 0.1
         }
-        // 直伤法术（后手留作斩杀，先手低留）
+        // 直伤法术
         if (known?.isDirectDamage == true) {
             score += if (isGoingFirst) 0.2 else 0.35
+            if (known.positionalBonus) score += 0.1  // 精确射击双重价值
         }
-        // 追踪术 / 时间之沙
-        if (card.cardId in setOf("CORE_DS1_184", "TIME_EVENT_999")) score += 0.3
-        // 希尔瓦娜斯的胜利（后手留）
-        if (card.cardId == "CATA_557" && !isGoingFirst) score += 0.3
-        // 3费牌
+        // 追踪术/时间之沙
+        if (card.cardId == "CORE_DS1_184") {
+            val hasOneDrop = WAR.me.handArea.cards.any {
+                it.cost == 1 && it.cardType == CardTypeEnum.MINION && it.cardId != card.cardId
+            }
+            score += if (hasOneDrop) 0.15 else 0.35  // 已有1费降低追踪术价值
+        }
+        if (card.cardId == "TIME_EVENT_999") score += 0.4
+        // 3费牌（三姐妹/直面托维尔）
         if (card.cost == 3) {
-            score += if (isGoingFirst) 0.15 else 0.3
+            score += if (isGoingFirst) 0.1 else 0.25
+            if (known?.isReplay1Cost == true) score -= 0.3  // 前期不留直面托维尔
         }
         // 高费惩罚
         if (card.cost >= 4) score -= 3.0
@@ -193,7 +210,6 @@ class FaceHunterDeck : DeckStrategy() {
         if (card.cost > 0 && card.cardType == CardTypeEnum.MINION) {
             score += (card.atc + card.health).toDouble() / card.cost * 0.08
         }
-        // 已知牌bonus
         if (known != null) score += known.bonus * 0.1
 
         CARD_DATA_TRIE[card.cardId]?.let { cardData ->
@@ -221,19 +237,24 @@ class FaceHunterDeck : DeckStrategy() {
 
         val heroPower = me.playArea.power
 
-        // 1. 敌方场面评估
+        // 1. 场面评估
         val enemyMinions = rival.playArea.cards.filter { it.cardType == CardTypeEnum.MINION }
         val enemyTaunts = enemyMinions.filter { it.isEnemyTauntLike() }
         val enemyAtk = enemyMinions.sumOf { it.atc }
         val myMinionCount = me.playArea.cards.count { it.cardType == CardTypeEnum.MINION }
         val freeSpace = 7 - myMinionCount
-        log.info { "=== ${me.usableResource}费 手牌${me.handArea.cards.size} 我方${myMinionCount}随从(空${freeSpace}格) 敌${enemyMinions.size}个(攻${enemyAtk}) ===" }
+        val handSize = me.handArea.cards.size
+        log.info { "=== ${me.usableResource}费 手牌${handSize} 我方${myMinionCount}随从(空${freeSpace}格) 敌${enemyMinions.size}个(攻${enemyAtk}) ===" }
 
-        // 2. 斩杀检测（快攻猎核心：只要场攻够就赢）
+        // 1.5 TIME_606 0费射箭检测
+        val hasZeroHp = me.playArea.cards.any { it.cardId == "TIME_606" } && handSize <= 3
+        if (hasZeroHp && heroPower != null && heroPower.cost <= me.usableResource) {
+            log.info { "造箭师在场+手牌${handSize}≤3 → 0费英雄技能" }
+        }
+
+        // 2. 斩杀检测
         val hasLethal = checkLethal(me, rival)
-        val nearLethal = isNearLethal(me, rival)
-        if (hasLethal) log.info { "斩杀! 场攻 ≥ 敌方血量" }
-        else if (nearLethal) log.info { "接近斩杀(场攻≥HP70%)" }
+        if (hasLethal) log.info { "斩杀! 总伤害 ≥ 敌方血量" }
 
         // 3. 手牌处理
         val hands = me.handArea.cards.toList()
@@ -242,26 +263,23 @@ class FaceHunterDeck : DeckStrategy() {
 
         // 4. 自定义DP
         val dpMana = me.usableResource
-        val (dpScore, dpCards) = customDP(myCards, dpMana, enemyMinions,
-            myMinionCount, freeSpace)
+        val (dpScore, dpCards) = customDP(myCards, dpMana, enemyMinions, myMinionCount, freeSpace)
         val dpFmt = "%.1f".format(dpScore)
         log.info { "DP得分${dpFmt} 选中${dpCards.size}张" }
 
         var finalCards = dpCards
 
-        // 5. 硬币评估：能多出一张随从或提前出群体buff时使用
+        // 5. 硬币评估
         val coin = DeckStrategyUtil.findCoin(hands)
         if (coin != null && me.usableResource <= 5) {
-            val (cScore, cCards) = customDP(myCards, dpMana + 1, enemyMinions,
-                myMinionCount, freeSpace)
+            val (cScore, cCards) = customDP(myCards, dpMana + 1, enemyMinions, myMinionCount, freeSpace)
             val coinCardsCost = cCards.sumOf { it.card.actualCost(me, enemyMinions) }
             val noCoinCardsCost = dpCards.sumOf { it.card.actualCost(me, enemyMinions) }
-            val enablesBuff = cCards.any { KNOWN_CARD_MAP[it.card.cardId]?.isBoardBuff == true } &&
-                !dpCards.any { KNOWN_CARD_MAP[it.card.cardId]?.isBoardBuff == true }
-            if ((cScore > dpScore + 2.0 && coinCardsCost > noCoinCardsCost) || enablesBuff) {
+            if ((cScore > dpScore + 2.0 && coinCardsCost > noCoinCardsCost)
+                || cCards.size > dpCards.size + 1
+            ) {
                 val cFmt = "%.1f".format(cScore)
-                val extra = if (enablesBuff) " (出群体buff!)" else ""
-                log.info { "硬币 得分${cFmt}${extra}" }
+                log.info { "硬币 得分${cFmt}" }
                 coin.action.power()
                 Thread.sleep((100..180).random().toLong())
                 finalCards = cCards
@@ -271,7 +289,7 @@ class FaceHunterDeck : DeckStrategy() {
         // 6. 排序出牌
         if (finalCards.isNotEmpty()) {
             DeckStrategyUtil.updateTextForCard(finalCards)
-            val sorted = sortCards(finalCards, myMinionCount)
+            val sorted = sortCards(finalCards, myMinionCount, handSize)
             log.info { "出牌序列:" }
             for (swc in sorted) {
                 val v = "%.1f".format(swc.weight)
@@ -284,32 +302,20 @@ class FaceHunterDeck : DeckStrategy() {
                 val c = swc.card
                 if (me.usableResource >= c.actualCost(me, enemyMinions)) {
                     val known = KNOWN_CARD_MAP[c.cardId]
-                    // 群体buff(希尔瓦娜斯的胜利)在随从<2时推迟
-                    if (known?.isBoardBuff == true && myMinionCount < 2) {
-                        log.info { "推迟buff: ${c.entityName.ifEmpty { c.cardId }} 场面仅${myMinionCount}随从" }
-                        continue
-                    }
                     val curCnt = me.playArea.cards.count { it.cardType == CardTypeEnum.MINION }
                     val needSpace = known?.needsSpace ?: (if (c.cardType == CardTypeEnum.MINION) 1 else 0)
                     if (curCnt + needSpace > 7) {
                         log.info { "格子满: ${c.entityName.ifEmpty { c.cardId }}" }
                         continue
                     }
-                    if (known?.isDirectDamage == true && known.needsTargeting == true) {
-                        // 击伤猎物：指向敌方随从
-                        playCardWithTargeting(c, me, rival)
-                    } else if (c.cardType === CardTypeEnum.SPELL && known?.isDirectDamage == true) {
-                        // 直伤法术：打脸
-                        val hero = rival.playArea.hero
-                        if (hero != null) {
-                            log.info { "直伤打脸: ${c.entityName.ifEmpty { c.cardId }}" }
-                            c.action.power(hero)
-                        } else {
-                            c.action.power()
-                        }
-                    } else {
-                        playCardWithTargeting(c, me, rival)
+                    // TIME_600 位置提示
+                    if (known?.positionalBonus == true) {
+                        val posInHand = me.handArea.cards.indexOf(c)
+                        val totalHand = me.handArea.cards.size
+                        val isMiddle = totalHand > 1 && posInHand == totalHand / 2
+                        log.info { "精确射击 手牌位置${posInHand}/${totalHand} ${if (isMiddle) "正中(打5!)" else "非正中(打3)"}" }
                     }
+                    playCardWithTargeting(c, me, rival)
                     used += c.actualCost(me, enemyMinions)
                     Thread.sleep(if (firstAction) (100..180).random().toLong() else (80..150).random().toLong())
                     firstAction = false
@@ -321,28 +327,36 @@ class FaceHunterDeck : DeckStrategy() {
         }
 
         // 6.5 时间线检测
-        val hasTimelineTrigger = finalCards.any { KNOWN_CARD_MAP[it.card.cardId]?.triggersTimeline == true }
-        if (hasTimelineTrigger) {
-            log.info { "已打出时间线触发牌，跳过解场" }
+        if (finalCards.any { KNOWN_CARD_MAP[it.card.cardId]?.triggersTimeline == true }) {
+            log.info { "已打出时间线触发牌" }
             Thread.sleep((500..800).random().toLong())
             return
         }
 
-        // 7. 解嘲讽（仅斩杀或接近斩杀时清理嘲讽）
+        // 7. 解嘲讽（斩杀时清理）
         if (hasLethal && enemyTaunts.isNotEmpty()) {
             clearTauntsForLethal(me, enemyTaunts)
         }
 
-        // 8. cleanPlay
+        // 8. cleanPlay（通用解场）
         DeckStrategyUtil.cleanPlay()
 
-        // 9. 兜底打脸（快攻核心）
+        // 9. 兜底打脸
         postCleanUpAttacks(me, rival)
 
-        // 10. 地标激活（如有）
+        // 10. 地标激活
         DeckStrategyUtil.activeLocation(me.playArea.cards.toList())
 
-        // 11. 贪婪填充：用尽剩余法力
+        // 11. 英雄技能：铺场后用剩余费用补伤害（TIME_606在场+手牌≤3时为0费）
+        heroPower?.let { p ->
+            if (me.usableResource >= p.cost) {
+                log.info { "英雄技能(稳固射击)" }
+                p.action.power()
+                Thread.sleep((100..200).random().toLong())
+            }
+        }
+
+        // 12. 贪婪填充
         val curMinionCnt = me.playArea.cards.count { it.cardType == CardTypeEnum.MINION }
         val updatedFreeSpace = 7 - curMinionCnt
         var remaining = me.handArea.cards.toList()
@@ -389,21 +403,16 @@ class FaceHunterDeck : DeckStrategy() {
             }
         }
 
-        // 12. 英雄技能：快攻猎HP是稳固射击(2伤打脸)，有费就咬
+        // 13. 填充后再次检查英雄技能（可能0费可用）
         heroPower?.let { p ->
             if (me.usableResource >= p.cost) {
-                // 快攻猎核心：有费就射脸
-                val hasBetterPlay = remaining.isNotEmpty() &&
-                    remaining.any { it.actualCost(me, enemyMinions) <= me.usableResource }
-                if (!hasBetterPlay || me.usableResource >= p.cost + 1) {
-                    log.info { "英雄技能(稳固射击)" }
-                    p.action.power()
-                    Thread.sleep((100..200).random().toLong())
-                }
+                log.info { "英雄技能(稳固射击-补)" }
+                p.action.power()
+                Thread.sleep((100..200).random().toLong())
             }
         }
 
-        // 13. 激发
+        // 14. 激发
         me.playArea.cards.toList().forEach { c ->
             if (c.isLaunchpad && me.usableResource >= c.launchCost()) {
                 c.action.launch()
@@ -421,23 +430,11 @@ class FaceHunterDeck : DeckStrategy() {
         val hero = rival.playArea.hero ?: return false
         val rivalHp = hero.health + hero.armor - hero.damage
         val hasTaunt = rival.playArea.cards.any { it.isEnemyTauntLike() }
-        // 还要算上手牌直伤
         val handDirectDmg = me.handArea.cards
             .filter { KNOWN_CARD_MAP[it.cardId]?.isDirectDamage == true && it.actualCost(me, emptyList()) <= me.usableResource }
             .sumOf { KNOWN_CARD_MAP[it.cardId]?.directDamageValue ?: 0 }
         val heroPowerDmg = if (me.usableResource >= 2 && me.playArea.power != null) 2 else 0
-        val totalReach = myAtk + handDirectDmg + heroPowerDmg
-        return totalReach >= rivalHp && !hasTaunt
-    }
-
-    private fun isNearLethal(me: Player, rival: Player): Boolean {
-        val myAtk = me.playArea.cards
-            .filter { it.atc > 0 && (it.cardType == CardTypeEnum.MINION || it.cardType == CardTypeEnum.HERO) }
-            .sumOf { it.atc }
-        val hero = rival.playArea.hero ?: return false
-        val rivalHp = hero.health + hero.armor - hero.damage
-        val hasTaunt = rival.playArea.cards.any { it.isEnemyTauntLike() }
-        return myAtk >= rivalHp * 0.7 && !hasTaunt
+        return myAtk + handDirectDmg + heroPowerDmg >= rivalHp && !hasTaunt
     }
 
     // ==================== 嘲讽检测 ====================
@@ -452,17 +449,14 @@ class FaceHunterDeck : DeckStrategy() {
         val myMinions = me.playArea.cards
             .filter { it.cardType == CardTypeEnum.MINION && it.atc > 0 && !it.isExhausted }
         if (myMinions.isEmpty()) return
-
         for (taunt in taunts.sortedBy { it.health }) {
             val attackers = myMinions.filter { !it.isExhausted && it.atc > 0 }
-            // 最小代价解嘲讽：用刚好能解掉的随从
             val best = attackers
                 .filter { it.atc >= taunt.health }
                 .minByOrNull { it.atc * it.health }
-                ?: attackers.maxByOrNull { it.atc }  // 解不掉就最大攻撞
-
+                ?: attackers.maxByOrNull { it.atc }
             if (best != null && !best.isExhausted) {
-                log.info { "解嘲讽: ${best.entityName}(${best.atc}/${best.health})→${taunt.entityName}(${taunt.atc}/${taunt.health})" }
+                log.info { "解嘲讽: ${best.entityName}(${best.atc}/${best.health})→${taunt.entityName}" }
                 best.action.attack(taunt)
                 Thread.sleep((80..150).random().toLong())
             }
@@ -472,18 +466,13 @@ class FaceHunterDeck : DeckStrategy() {
     // ==================== 自定义DP ====================
 
     private fun customDP(
-        cards: List<Card>,
-        mana: Int,
-        enemies: List<Card>,
-        myMinionCount: Int,
-        freeSpace: Int,
+        cards: List<Card>, mana: Int, enemies: List<Card>,
+        myMinionCount: Int, freeSpace: Int,
     ): Pair<Double, List<SimulateWeightCard>> {
         if (cards.isEmpty() || mana <= 0) return Pair(0.0, emptyList())
         val me = WAR.me
         val n = cards.size
-        val vals = DoubleArray(n) { i ->
-            calcValue(cards[i], mana, enemies, myMinionCount, freeSpace)
-        }
+        val vals = DoubleArray(n) { i -> calcValue(cards[i], mana, enemies, myMinionCount, freeSpace) }
         val costs = IntArray(n) { i -> cards[i].actualCost(me, enemies) }
         val dp = DoubleArray(mana + 1)
         val keep = Array(n) { BooleanArray(mana + 1) }
@@ -492,19 +481,13 @@ class FaceHunterDeck : DeckStrategy() {
             if (c > mana) continue
             for (j in mana downTo c) {
                 val nv = dp[j - c] + vals[i]
-                if (nv > dp[j]) {
-                    dp[j] = nv
-                    keep[i][j] = true
-                }
+                if (nv > dp[j]) { dp[j] = nv; keep[i][j] = true }
             }
         }
         val sel = mutableListOf<SimulateWeightCard>()
         var j = mana
         for (i in n - 1 downTo 0) {
-            if (keep[i][j]) {
-                sel.add(SimulateWeightCard(cards[i], vals[i], 0.0))
-                j -= costs[i]
-            }
+            if (keep[i][j]) { sel.add(SimulateWeightCard(cards[i], vals[i], 0.0)); j -= costs[i] }
         }
         return Pair(dp[mana], sel.reversed())
     }
@@ -512,82 +495,114 @@ class FaceHunterDeck : DeckStrategy() {
     // ==================== 卡牌价值 ====================
 
     private fun calcValue(
-        c: Card,
-        mana: Int,
-        enemies: List<Card>,
-        myMinionCount: Int = 0,
-        freeSpace: Int = 7,
+        c: Card, mana: Int, enemies: List<Card>,
+        myMinionCount: Int = 0, freeSpace: Int = 7,
     ): Double {
         val known = KNOWN_CARD_MAP[c.cardId]
+        val handSize = WAR.me.handArea.cards.size
         var v = 0.5
+
+        // INVALID/UNKNOWN惩罚：非本卡组的外部生成牌
+        if (c.cardType == CardTypeEnum.INVALID && known == null) {
+            return -5.0  // 直接负分，DP不会选
+        }
 
         if (known != null) v += known.bonus
 
-        // 直伤价值：快攻猎核心
+        // 直伤价值（奥术射击/精确射击/希尔瓦娜斯胜利/炽烈烬火亡语/击伤猎物）
         if (known?.isDirectDamage == true) {
             val dmg = known.directDamageValue
-            v += dmg * 2.5  // 每点直伤=2.5价值（可打脸斩杀）
+            // 基础：每点直伤价值2.5
+            v += dmg * 2.5
+            // 精确射击位置加成
+            if (known.positionalBonus) {
+                val posInHand = WAR.me.handArea.cards.indexOf(c)
+                val totalHand = handSize
+                val isMiddle = totalHand > 1 && posInHand == totalHand / 2
+                if (isMiddle) v += 2.0  // 打5比打3多2价值
+            }
+            // CATA_557第二张：AOE全体敌人（价值更高）
+            if (known.isSecondCopyUpgrade) {
+                val graveCount = WAR.me.graveyardArea?.cards?.count { it.cardId == "CATA_557" } ?: 0
+                if (graveCount >= 1 && enemies.isNotEmpty()) {
+                    v += enemies.size * 2.0  // 打全体=AOE
+                }
+            }
+            // 接近斩杀时直伤加分
             val rivalHpVal = rivalHealthPercent()
-            // 接近斩杀时直伤更珍贵
-            if (rivalHpVal <= 0.5) v += dmg * 1.5
-            else if (rivalHpVal <= 0.3) v += dmg * 3.0
+            if (rivalHpVal <= 0.5) v += dmg * 1.0
+            if (rivalHpVal <= 0.3) v += dmg * 2.0
         }
 
         // 身材效率（快攻猎偏好高攻低费）
         if (c.cost > 0 && c.cardType == CardTypeEnum.MINION) {
-            // 攻击力权重高于血量（快攻猎要的是输出）
             v += (c.atc * 0.5 + c.health * 0.2) / c.cost
-            if (c.atc >= 3) v += c.atc * 0.15  // 高攻随从加分
+            if (c.atc >= 3) v += c.atc * 0.15
+            if (known?.isElusive == true) v += 0.5  // 扰魔=更难解
         }
 
-        // 群体buff：希尔瓦娜斯的胜利+2攻，直面托维尔+1/+1
-        if (known?.isBoardBuff == true) {
-            val atkGain = known.buffAttack * myMinionCount
-            v += atkGain * 2.0  // 攻击增量=直接打脸伤害
-            if (myMinionCount >= 4) v += 3.0
-            else if (myMinionCount >= 3) v += 1.5
-            else if (myMinionCount >= 2) v += 0.5
-            // 随从少时buff价值低
-            if (myMinionCount <= 1) v -= 4.0
+        // 0费射箭引擎（TIME_606在场+手牌≤3）
+        if (known?.isZeroHpEnabler == true) {
+            val hasZeroHpAlready = WAR.me.playArea.cards.any { it.cardId == "TIME_606" }
+            if (!hasZeroHpAlready) {
+                v += 2.0  // 第一张高价值
+                if (handSize <= 3) v += 1.5  // 立即触发0费射箭
+            } else {
+                v -= 2.0  // 第二张价值低
+            }
         }
 
-        // 铺场token
-        if (known?.isTokenGenerator == true) {
-            val tokens = known.tokensGenerated.coerceAtMost(freeSpace)
-            v += tokens * 1.8
-            if (myMinionCount >= 2 && c.cardId == "CATA_560") v += 2.0  // 直面托维尔有场面时更强
+        // 重放1费牌（CATA_560）：价值随已打出的1费牌数量增长
+        if (known?.isReplay1Cost == true) {
+            val grave = WAR.me.graveyardArea
+            val played1CostCount = grave?.cards?.count { it.cost == 1 && it.cardType == CardTypeEnum.MINION } ?: 0
+                + (grave?.cards?.count { it.cost == 1 && it.cardType == CardTypeEnum.SPELL } ?: 0)
+            v += played1CostCount * 1.5  // 每张打过的1费牌+1.5
+            if (played1CostCount >= 4) v += 3.0  // 大量1费=超高价值
+            else if (played1CostCount >= 2) v += 1.0
+            if (played1CostCount < 2) v -= 3.0  // 几乎没打1费牌时价值低
+        }
+
+        // 给石头（TLC_427）：1费打3石头=直伤价值
+        if (known?.givesStone == true) {
+            v += (known.stoneDamage * 2.5) * 0.7  // 石头需要额外1费打出，折价
         }
 
         // 过牌/发现
         if (known?.isDraw == true) {
-            val handSize = WAR.me.handArea.cards.size
-            v += known.drawCount * 1.0
-            if (handSize <= 3) v += 1.5  // 手牌少时过牌迫切
-            if (handSize >= 7) v -= 2.0  // 防爆牌
+            if (known.drawUntilHandSize > 0) {
+                // TIME_601：手牌越小价值越高
+                val drawsNeeded = (known.drawUntilHandSize - handSize).coerceAtLeast(0)
+                v += drawsNeeded * 1.5
+                if (handSize <= 1) v += 2.0
+                if (handSize >= 4) v -= 3.0  // 手牌≥4时抽不到牌
+            } else {
+                v += known.drawCount * 0.8
+                if (handSize <= 3) v += 1.0
+            }
+            if (handSize >= 8) v -= 3.0  // 防爆牌
+        }
+
+        // 冻结
+        if (known?.isFreeze == true && enemies.isNotEmpty()) v += 0.8
+
+        // 亡语直伤（炽烈烬火）
+        if (known?.isDeathrattle == true && known.isDirectDamage) v += 0.5
+
+        // 关键词
+        if (c.cardType == CardTypeEnum.MINION) {
+            if (c.isCharge) v += 3.0
+            if (c.isRush) { v += 1.5; if (enemies.isNotEmpty()) v += 0.5 }
+            if (c.isDivineShield) v += 0.5
         }
 
         // 费用适配
         val actualCost = c.actualCost(WAR.me, enemies)
         if (actualCost > 0 && actualCost <= mana) {
-            v += actualCost.toDouble() / mana.coerceAtLeast(1) * 0.6
+            v += actualCost.toDouble() / mana.coerceAtLeast(1) * 0.5
         }
 
-        // 冻结效果价值
-        if (known?.isFreeze == true && enemies.isNotEmpty()) {
-            v += 0.8  // 冻结可冻结威胁随从或嘲讽
-        }
-
-        // 关键词价值
-        if (c.cardType == CardTypeEnum.MINION) {
-            if (c.isCharge) v += 3.0  // 冲锋=直接伤害
-            if (c.isRush) { v += 1.5; if (enemies.isNotEmpty()) v += 0.5 }
-            if (c.isDivineShield) v += 0.5  // 圣盾=更难解
-        }
-
-        CARD_DATA_TRIE[c.cardId]?.let { cardData ->
-            v += cardData.weight * 0.1
-        }
-
+        CARD_DATA_TRIE[c.cardId]?.let { v += it.weight * 0.1 }
         return v
     }
 
@@ -600,46 +615,50 @@ class FaceHunterDeck : DeckStrategy() {
 
     // ==================== 卡牌实际费用 ====================
 
-    private fun Card.actualCost(me: Player, enemies: List<Card>): Int {
-        return this.cost
-    }
+    private fun Card.actualCost(me: Player, enemies: List<Card>): Int = this.cost
 
     // ==================== 排序 ====================
 
     private fun sortCards(
         cards: List<SimulateWeightCard>,
         myMinionCount: Int,
+        handSize: Int,
     ): List<SimulateWeightCard> {
         val cardIds = cards.map { it.card.cardId }.toSet()
+        val sisInHand = cardIds.filter { KNOWN_CARD_MAP[it]?.isSisterCard == true }.toSet()
         return cards.sortedBy { swc ->
             val c = swc.card
             val known = KNOWN_CARD_MAP[c.cardId]
             when {
-                // 1. 时间之沙（触发时间线）最先
+                // 1. 时间之沙（最先）
                 known?.triggersTimeline == true -> -10
                 // 2. 0费牌
                 c.cost == 0 -> -5
                 // 3. 1费随从（抢先铺场）
                 c.cost == 1 && c.cardType == CardTypeEnum.MINION -> 0
-                // 4. 1费过牌（追踪术）
-                c.cost == 1 && known?.isDraw == true -> 5
+                // 4. 1费法术（铺场后出）
+                c.cost == 1 && c.cardType == CardTypeEnum.SPELL -> 5
                 // 5. 2费随从
                 c.cost == 2 && c.cardType == CardTypeEnum.MINION -> 10
-                // 6. 群体buff（随从足够时先出）
-                known?.isBoardBuff == true -> when {
-                    myMinionCount >= 4 -> 8
-                    myMinionCount >= 2 -> 15
-                    else -> 60
+                // 6. 2费法术（直伤后出）
+                c.cost == 2 && c.cardType == CardTypeEnum.SPELL -> 15
+                // 7. 三姐妹协同：t1(奥蕾莉亚)→t2(温蕾萨)→609(希尔瓦娜斯)
+                known?.isSisterCard == true -> {
+                    when (c.cardId) {
+                        "TIME_609t1" -> 18  // 奥蕾莉亚：最先发现法术
+                        "TIME_609t2" -> 20  // 温蕾萨：第二buff牌库
+                        "TIME_609" -> {
+                            // 希尔瓦娜斯：有姐妹则AOE重复更多
+                            val sisCount = sisInHand.count {
+                                it == "TIME_609t1" || it == "TIME_609t2"
+                            }
+                            22 - sisCount  // 姐妹越多越早出（更多AOE重复）
+                        }
+                        else -> 20
+                    }
                 }
-                // 7. 直伤法术（后出，留作斩杀）
-                known?.isDirectDamage == true -> 40
-                // 8. 3费随从（三姐妹协同：奥蕾莉亚先于希尔瓦娜斯，双战吼AOE）
-                c.cost == 3 && c.cardType == CardTypeEnum.MINION -> when (c.cardId) {
-                    "TIME_609t1" -> 16  // 奥蕾莉亚：战吼触发两次，最优先
-                    "TIME_609" -> if (cardIds.contains("TIME_609t1")) 22 else 19  // 希尔瓦娜斯：有奥蕾莉亚时稍后
-                    "TIME_609t2" -> if (cardIds.contains("TIME_609t1")) 22 else 20  // 温蕾萨：有奥蕾莉亚时配合
-                    else -> 20
-                }
+                // 8. 直面托维尔（费高后出）
+                known?.isReplay1Cost == true -> 35
                 // 9. 其他随从
                 c.cardType == CardTypeEnum.MINION -> 25
                 // 10. 其他法术
@@ -668,17 +687,21 @@ class FaceHunterDeck : DeckStrategy() {
 
     private fun scoreDiscover(c: Card, me: Player): Double {
         val known = KNOWN_CARD_MAP[c.cardId]
+        val handSize = me.handArea.cards.size
         var s = 0.5
 
         // 爆牌预防
-        val handSize = me.handArea.cards.size
         if (handSize >= 9) {
             if (c.cost <= 1) s += 2.0 else if (c.cost >= 4) s -= 3.0
         } else if (handSize >= 7) {
             if (c.cost <= 2) s += 1.0 else if (c.cost >= 5) s -= 2.0
         }
 
+        // 已知牌bonus
         if (known != null) s += known.bonus * 0.5
+
+        // INVALID惩罚
+        if (c.cardType == CardTypeEnum.INVALID && known == null) s -= 3.0
 
         // 身材效率
         if (c.cost > 0 && c.cardType == CardTypeEnum.MINION) {
@@ -689,20 +712,19 @@ class FaceHunterDeck : DeckStrategy() {
         if (c.cost <= me.usableResource) s += 0.3
         else if (c.cost > me.usableResource + 3) s -= 0.4
 
-        // 快攻猎偏好：直伤 > 低费随从 > buff > 高费
+        // 快攻猎偏好
         if (known?.isDirectDamage == true) s += known.directDamageValue * 0.6
         if (known?.isFaceMinion == true) s += 0.8
+        if (known?.isZeroHpEnabler == true && !me.playArea.cards.any { it.cardId == "TIME_606" }) s += 1.5
+        if (known?.isReplay1Cost == true) s += 1.0
         if (c.cost in 1..2 && c.cardType == CardTypeEnum.MINION) s += 0.6
-        if (known?.isBoardBuff == true) {
-            val myCnt = me.playArea.cards.count { it.cardType == CardTypeEnum.MINION }
-            if (myCnt >= 3) s += 1.5 else if (myCnt >= 1) s += 0.5
-        }
-        if (c.cost >= 5) s -= 1.5  // 快攻猎不要高费
+        if (c.cost >= 5) s -= 1.5
 
         // 关键词
         if (c.isCharge) s += 1.5
         if (c.isRush && WAR.rival.playArea.cards.any { it.cardType == CardTypeEnum.MINION }) s += 0.5
         if (c.isDivineShield) s += 0.3
+        if (known?.isElusive == true) s += 0.3
 
         CARD_DATA_TRIE[c.cardId]?.let { cd -> s += cd.weight * 0.1 }
         return s
@@ -719,24 +741,19 @@ class FaceHunterDeck : DeckStrategy() {
             .filter { it.atc > 0 && it.cardType == CardTypeEnum.MINION }
             .sumOf { it.atc }
 
-        // 快攻猎时间线评估：场面攻击力高 → 维持；攻击力低/对面场面大 → 回溯
         val score = scoreBoard(me, myMinionCount, myAtk, enemyMinions)
         val threshold = if (myAtk >= 8) 0.35 else 0.55
-        log.info { "时间线评分=${"%.2f".format(score)} 阈值=$threshold 场攻$myAtk 随从$myMinionCount → ${if (score >= threshold) "维持" else "回溯"}" }
+        log.info { "时间线评分=${"%.2f".format(score)} 阈值=$threshold 场攻$myAtk → ${if (score >= threshold) "维持" else "回溯"}" }
         if (score >= threshold) timeLineEvent.keep() else timeLineEvent.rewind()
     }
 
     private fun scoreBoard(me: Player, myMinionCount: Int, myAtk: Int, enemyMinions: List<Card>): Double {
         var s = 0.5
-        // 场面攻击力
         s += (myAtk - 4).coerceIn(-3, 8) * 0.05
-        // 手牌资源
         s += (me.handArea.cards.size - 3).coerceIn(-3, 3) * 0.04
-        // 敌方压力
         val enemyAtk = enemyMinions.sumOf { it.atc }
         s -= (enemyMinions.size - 1).coerceAtLeast(0) * 0.06
         if (enemyAtk >= 8) s -= 0.1
-        // 血量
         val hero = me.playArea.hero ?: return s
         val maxHp = hero.health + hero.armor
         val curHp = maxHp - hero.damage
@@ -750,7 +767,7 @@ class FaceHunterDeck : DeckStrategy() {
         val known = KNOWN_CARD_MAP[c.cardId]
         val cardInfo = CARD_DATA_TRIE[c.cardId]
 
-        // 指向性卡牌
+        // 指向性卡牌：手动选目标
         if (known?.needsTargeting == true) {
             val targets = if (known.targetsEnemy) {
                 rival.playArea.cards.filter { it.cardType == CardTypeEnum.MINION && it.canBeTargetedByRivalSpells() }
@@ -759,7 +776,6 @@ class FaceHunterDeck : DeckStrategy() {
             }
             if (targets.isNotEmpty()) {
                 val target = if (known.targetsEnemy) {
-                    // 击伤猎物：优先选低血可斩杀的敌方随从
                     targets.filter { it.health <= 1 || it.atc >= 3 }
                         .minByOrNull { it.health }
                         ?: targets.minByOrNull { it.health }
@@ -767,13 +783,23 @@ class FaceHunterDeck : DeckStrategy() {
                     targets.maxByOrNull { it.atc }
                 }
                 if (target != null) {
-                    log.info { "指向出牌: ${c.entityName}→${target.entityName}(${target.atc}/${target.health})" }
+                    log.info { "指向出牌: ${c.entityName.ifEmpty { c.cardId }}→${target.entityName}" }
                     c.action.power(target)
                     return
                 }
             }
-            log.info { "指向出牌(${c.entityName})无目标，跳过" }
+            log.info { "指向出牌(${c.entityName.ifEmpty { c.cardId }})无目标，跳过" }
             return
+        }
+
+        // 直伤法术兜底：指向敌方英雄
+        if (known?.isDirectDamage == true && c.cardType == CardTypeEnum.SPELL) {
+            val rivalHero = rival.playArea.hero
+            if (rivalHero != null) {
+                log.info { "直伤打脸: ${c.entityName.ifEmpty { c.cardId }}" }
+                c.action.power(rivalHero)
+                return
+            }
         }
 
         // 普通出牌
@@ -793,15 +819,13 @@ class FaceHunterDeck : DeckStrategy() {
         }
         val enemyHero = rival.playArea.hero
 
-        // 有嘲讽先解嘲讽
+        // 有嘲讽先解
         if (enemyTaunts.isNotEmpty()) {
             for (taunt in enemyTaunts.sortedBy { it.health }) {
                 val attacker = unchecked
                     .filter { !it.isExhausted && it.atc > 0 && it.atc >= taunt.health }
                     .minByOrNull { it.atc * it.health }
-                    ?: unchecked
-                        .filter { !it.isExhausted && it.atc > 0 }
-                        .maxByOrNull { it.atc }
+                    ?: unchecked.filter { !it.isExhausted && it.atc > 0 }.maxByOrNull { it.atc }
                 if (attacker != null && !attacker.isExhausted) {
                     log.info { "解嘲讽: ${attacker.entityName}→${taunt.entityName}" }
                     attacker.action.attack(taunt)
@@ -810,7 +834,7 @@ class FaceHunterDeck : DeckStrategy() {
             }
         }
 
-        // 打脸！（快攻猎核心）
+        // 打脸
         val stillUnchecked = me.playArea.cards.filter {
             it.cardType == CardTypeEnum.MINION && it.atc > 0 && !it.isExhausted
         }
