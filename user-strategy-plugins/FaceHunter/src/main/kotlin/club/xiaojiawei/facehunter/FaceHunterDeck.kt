@@ -246,10 +246,28 @@ class FaceHunterDeck : DeckStrategy() {
         val handSize = me.handArea.cards.size
         log.info { "=== ${me.usableResource}费 手牌${handSize} 我方${myMinionCount}随从(空${freeSpace}格) 敌${enemyMinions.size}个(攻${enemyAtk}) ===" }
 
-        // 1.5 TIME_606 0费射箭检测
+        // 1.5 先攻后铺：现有随从先打脸（伤害前置，防止先出牌后攻击的伏笔）
+        val existingMinions = me.playArea.cards.filter {
+            it.cardType == CardTypeEnum.MINION && it.atc > 0 && !it.isExhausted
+        }
+        if (existingMinions.isNotEmpty() && enemyTaunts.isEmpty()) {
+            val rivalHero = rival.playArea.hero
+            if (rivalHero != null) {
+                for (m in existingMinions.sortedByDescending { it.atc }) {
+                    log.info { "先攻打脸: ${m.entityName}(${m.atc}/${m.health})→敌方英雄" }
+                    m.action.attack(rivalHero)
+                    Thread.sleep((80..150).random().toLong())
+                }
+            }
+        }
+        // 1.6 造箭师0费射箭：DP前使用（减手牌触发0费条件 + 伤害前置）
         val hasZeroHp = me.playArea.cards.any { it.cardId == "TIME_606" } && handSize <= 3
+        var heroPowerUsed = false
         if (hasZeroHp && heroPower != null && heroPower.cost <= me.usableResource) {
-            log.info { "造箭师在场+手牌${handSize}≤3 → 0费英雄技能" }
+            log.info { "造箭师在场+手牌${handSize}≤3 → 0费英雄技能(DP前)" }
+            heroPower.action.power()
+            heroPowerUsed = true
+            Thread.sleep((100..200).random().toLong())
         }
 
         // 2. 斩杀检测
@@ -326,37 +344,31 @@ class FaceHunterDeck : DeckStrategy() {
             log.info { "DP未选中牌" }
         }
 
-        // 6.5 时间线检测
+        // 6.5 出牌后打脸：所有随从（含刚打出的冲锋/突袭）打脸伤害最大化
+        postCleanUpAttacks(me, rival)
+
+        // 6.6 英雄技能：攻击后用剩余费用补伤害
+        if (!heroPowerUsed && heroPower != null && me.usableResource >= heroPower.cost) {
+            log.info { "英雄技能(稳固射击)" }
+            heroPower.action.power()
+            heroPowerUsed = true
+            Thread.sleep((100..200).random().toLong())
+        }
+
+        // 6.7 时间线检测（攻击+射箭已前置完成，即使时间线回溯也不丢伤害）
         if (finalCards.any { KNOWN_CARD_MAP[it.card.cardId]?.triggersTimeline == true }) {
             log.info { "已打出时间线触发牌" }
             Thread.sleep((500..800).random().toLong())
             return
         }
 
-        // 7. 解嘲讽（斩杀时清理）
-        if (hasLethal && enemyTaunts.isNotEmpty()) {
-            clearTauntsForLethal(me, enemyTaunts)
-        }
-
-        // 8. cleanPlay（通用解场）
+        // 7. cleanPlay（通用解场 — 处理先攻后剩余的场面）
         DeckStrategyUtil.cleanPlay()
 
-        // 9. 兜底打脸
-        postCleanUpAttacks(me, rival)
-
-        // 10. 地标激活
+        // 8. 地标激活
         DeckStrategyUtil.activeLocation(me.playArea.cards.toList())
 
-        // 11. 英雄技能：铺场后用剩余费用补伤害（TIME_606在场+手牌≤3时为0费）
-        heroPower?.let { p ->
-            if (me.usableResource >= p.cost) {
-                log.info { "英雄技能(稳固射击)" }
-                p.action.power()
-                Thread.sleep((100..200).random().toLong())
-            }
-        }
-
-        // 12. 贪婪填充
+        // 9. 贪婪填充
         val curMinionCnt = me.playArea.cards.count { it.cardType == CardTypeEnum.MINION }
         val updatedFreeSpace = 7 - curMinionCnt
         var remaining = me.handArea.cards.toList()
@@ -403,16 +415,15 @@ class FaceHunterDeck : DeckStrategy() {
             }
         }
 
-        // 13. 填充后再次检查英雄技能（可能0费可用）
-        heroPower?.let { p ->
-            if (me.usableResource >= p.cost) {
-                log.info { "英雄技能(稳固射击-补)" }
-                p.action.power()
-                Thread.sleep((100..200).random().toLong())
-            }
+        // 10. 填充后英雄技能（可能因造箭师+手牌减少而0费可用）
+        if (!heroPowerUsed && heroPower != null && me.usableResource >= heroPower.cost) {
+            log.info { "英雄技能(稳固射击-补)" }
+            heroPower.action.power()
+            heroPowerUsed = true
+            Thread.sleep((100..200).random().toLong())
         }
 
-        // 14. 激发
+        // 11. 激发
         me.playArea.cards.toList().forEach { c ->
             if (c.isLaunchpad && me.usableResource >= c.launchCost()) {
                 c.action.launch()
@@ -502,9 +513,9 @@ class FaceHunterDeck : DeckStrategy() {
         val handSize = WAR.me.handArea.cards.size
         var v = 0.5
 
-        // INVALID/UNKNOWN惩罚：非本卡组的外部生成牌
-        if (c.cardType == CardTypeEnum.INVALID && known == null) {
-            return -5.0  // 直接负分，DP不会选
+        // INVALID惩罚：行为解析失败一律降分（cardId在KNOWN中也不放过）
+        if (c.cardType == CardTypeEnum.INVALID) {
+            return -5.0
         }
 
         if (known != null) v += known.bonus
