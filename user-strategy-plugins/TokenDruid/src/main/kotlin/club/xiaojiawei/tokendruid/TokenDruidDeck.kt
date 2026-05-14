@@ -80,7 +80,7 @@ private val KNOWN_CARD_MAP: Map<String, KnownCardInfo> = mapOf(
         cardType = CardTypeEnum.SPELL, isBuff = true, buffValue = 1.5, bonus = 1.5),
     "TLC_233" to KnownCardInfo(  // 孵化辅助师 3费2/3 战吼：≤2攻随从获+1/+2和嘲讽
         cardType = CardTypeEnum.MINION, atc = 2, health = 3,
-        isBattlecry = true, isBuff = true, buffValue = 1.5, bonus = 2.5),
+        isBattlecry = true, isBuff = true, buffValue = 2.5, bonus = 3.0),
     "CATA_138" to KnownCardInfo(  // 森林赠礼 2费 你每有一个随从，随机友方+1/+1
         cardType = CardTypeEnum.SPELL, isBuff = true, buffValue = 1.0, bonus = 2.0),
     // --- 过牌/发现 ---
@@ -230,12 +230,8 @@ class TokenDruidDeck : DeckStrategy() {
         if (!rival.isValid()) return
 
         val heroPower = me.playArea.power
-        var plays = me.playArea.cards.toList()
 
-        // 1. 地标激活
-        DeckStrategyUtil.activeLocation(plays)
-
-        // 2. 敌方场面评估
+        // 1. 敌方场面评估（地标激活延后到DP出牌后，避免满费时回费浪费）
         val enemyMinions = rival.playArea.cards.filter { it.cardType == CardTypeEnum.MINION }
         val enemyAtk = enemyMinions.sumOf { it.atc }
         val hasBig = enemyMinions.any { it.atc >= 4 }
@@ -383,18 +379,24 @@ class TokenDruidDeck : DeckStrategy() {
         // 8.5 兜底攻击
         postCleanUpAttacks(me, rival)
 
-        // 9. 贪婪填充：用尽剩余法力，但避免浪费buff
-        val curMinionCnt = me.playArea.cards.count { it.cardType == CardTypeEnum.MINION }
-        val updatedFreeSpace = 7 - curMinionCnt
-        val hasTokensNow = me.playArea.cards.count {
+        // 9. 地标激活（DP出牌消耗水晶后，地标回费不浪费）
+        DeckStrategyUtil.activeLocation(me.playArea.cards.toList())
+
+        // 10. 贪婪填充：用尽剩余法力
+        var curMinionCnt = me.playArea.cards.count { it.cardType == CardTypeEnum.MINION }
+        var updatedFreeSpace = 7 - curMinionCnt
+        var hasTokensNow = me.playArea.cards.count {
             it.cardType == CardTypeEnum.MINION && it.atc <= 2
         } >= 2
-        val remaining = me.handArea.cards.toList()
+        var remaining = me.handArea.cards.toList()
             .filter { !it.isCoinCard && it.actualCost(me, enemyMinions) <= me.usableResource }
             .filter {
-                // 场面 ≤2 随从时不填充 buff 牌（留到后面用）
                 val k = KNOWN_CARD_MAP[it.cardId]
-                !(k?.isBuff == true && curMinionCnt <= 2)
+                // 排除跳费牌（激活等）—— 贪婪阶段跳费无后续牌跟出是浪费
+                if (k?.isRamp == true) return@filter false
+                // 场面 ≤2 随从时过滤 buff 牌，但0-1费buff不放白不放
+                if (k?.isBuff == true && curMinionCnt <= 2 && it.actualCost(me, enemyMinions) >= 2) return@filter false
+                true
             }
             .sortedByDescending { calcValue(it, me.usableResource, enemyMinions, curMinionCnt, updatedFreeSpace, hasTokensNow, hasBuffInHand) }
         if (remaining.isNotEmpty() && me.usableResource > 0) {
@@ -416,10 +418,39 @@ class TokenDruidDeck : DeckStrategy() {
                 }
             }
         }
+        // 第二遍：剩余法力≥3时强制再填（放宽过滤条件）
+        if (me.usableResource >= 3) {
+            curMinionCnt = me.playArea.cards.count { it.cardType == CardTypeEnum.MINION }
+            updatedFreeSpace = 7 - curMinionCnt
+            hasTokensNow = me.playArea.cards.count {
+                it.cardType == CardTypeEnum.MINION && it.atc <= 2
+            } >= 2
+            remaining = me.handArea.cards.toList()
+                .filter { !it.isCoinCard && it.actualCost(me, enemyMinions) <= me.usableResource }
+                .sortedByDescending { calcValue(it, me.usableResource, enemyMinions, curMinionCnt, updatedFreeSpace, hasTokensNow, hasBuffInHand) }
+            if (remaining.isNotEmpty()) {
+                log.info { "强制填充(≥3费): 剩${me.usableResource}费 ${remaining.size}张" }
+                for (c in remaining) {
+                    val actualCost = c.actualCost(me, enemyMinions)
+                    if (me.usableResource >= actualCost) {
+                        val curCnt = me.playArea.cards.count { it.cardType == CardTypeEnum.MINION }
+                        val ns = KNOWN_CARD_MAP[c.cardId]?.needsSpace
+                            ?: (if (c.cardType == CardTypeEnum.MINION) 1 else 0)
+                        if (c.cardType === CardTypeEnum.SPELL || c.cardType === CardTypeEnum.HERO) {
+                            playCardWithTargeting(c, me, rival)
+                        } else if (c.cardType === CardTypeEnum.LOCATION) {
+                            c.action.power()
+                        } else if (!me.playArea.isFull && curCnt + ns <= 7) {
+                            playCardWithTargeting(c, me, rival)
+                        }
+                        Thread.sleep((80..150).random().toLong())
+                    }
+                }
+            }
+        }
 
-        // 10. 地标二次激活
-        plays = me.playArea.cards.toList()
-        DeckStrategyUtil.activeLocation(plays)
+        // 11. 地标二次激活（贪婪填充后再次激活）
+        DeckStrategyUtil.activeLocation(me.playArea.cards.toList())
 
         // 11. 英雄技能：剩余法力多时使用，或有1血敌方随从可咬
         heroPower?.let { p ->
@@ -746,6 +777,16 @@ class TokenDruidDeck : DeckStrategy() {
                 myMinionCount == 1 -> -2.0                    // 1随从buff严重浪费
                 else -> -5.0                                  // 0随从buff是废牌
             }
+            // 身材增量价值：buff给每随从 ≈ buffValue 点身材，攻击增量可解场/斩杀
+            val atkGain = known.buffValue * myMinionCount
+            if (enemies.isNotEmpty()) {
+                v += atkGain * 0.25  // 攻击增量有解场潜力
+            }
+            v += known.buffValue * myMinionCount * 0.12  // 血量增量=存活/护脸
+            // buffValue≥2.0 的buff有额外关键词（嘲讽/圣盾），每随从额外加分
+            if (known.buffValue >= 2.0 && myMinionCount >= 2) {
+                v += myMinionCount * 0.5
+            }
             // 手牌有未使用的铺场牌时，buff应让位
             val hasTokenInHand = WAR.me.handArea.cards.any {
                 val k = KNOWN_CARD_MAP[it.cardId]
@@ -1019,10 +1060,10 @@ class TokenDruidDeck : DeckStrategy() {
         for ((i, c) in cards.withIndex()) {
             val s = scoreDiscover(c, me)
             val sf = "%.2f".format(s)
-            parts.add("[${i}]${c.entityName}(${c.atc}/${c.health})${c.cost}费=${sf}")
+            parts.add("[${i}]${c.entityName}(${c.atc}/${c.health})${c.cost}费=${sf} eid=${c.entityId}")
             if (s > bestS) { bestS = s; bestI = i }
         }
-        log.info { "发现: ${parts.joinToString(" | ")} → 选${bestI}" }
+        log.info { "发现: ${parts.joinToString(" | ")} → 选[${bestI}] eid=${cards[bestI].entityId} cardId=${cards[bestI].cardId}" }
         return bestI
     }
 
