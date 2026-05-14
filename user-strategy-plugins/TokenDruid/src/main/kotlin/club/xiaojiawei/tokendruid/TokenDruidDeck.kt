@@ -137,7 +137,7 @@ private val KNOWN_CARD_MAP: Map<String, KnownCardInfo> = mapOf(
         cardType = CardTypeEnum.MINION),
 )
 
-// ==================== 铺场德-v1 策略主类 ====================
+// ==================== 铺场德-v2 策略主类 ====================
 
 class TokenDruidDeck : DeckStrategy() {
 
@@ -146,10 +146,10 @@ class TokenDruidDeck : DeckStrategy() {
     // 柳牙是否已打出（避免重复扣除格子）
     private var wickerfangPlayed = false
 
-    override fun name(): String = "铺场德-v1"
+    override fun name(): String = "铺场德-v2"
 
     override fun description(): String =
-        "铺场德v1：跳费铺场+群体buff+地标协同+亡语赖场"
+        "铺场德v2：跳费铺场+群体buff+地标协同+亡语赖场，抉择牌反射修复"
 
     override fun getRunMode(): Array<RunModeEnum> =
         arrayOf(RunModeEnum.STANDARD, RunModeEnum.WILD, RunModeEnum.CASUAL, RunModeEnum.PRACTICE)
@@ -157,7 +157,7 @@ class TokenDruidDeck : DeckStrategy() {
     override fun deckCode(): String =
         "AAECAfHGBwTDgwevhwe4nwfgwAcNrp8EgdQEiIMHrocHkpcHlJcH15cH2p0Hqq8H18AH28AH7MAH9sEHAAA="
 
-    override fun id(): String = "token-druid-deck-v1"
+    override fun id(): String = "token-druid-deck-v2"
 
     override fun referWeight(): Boolean = true
     override fun referPowerWeight(): Boolean = true
@@ -923,7 +923,7 @@ class TokenDruidDeck : DeckStrategy() {
                 }
                 // Step 2: 等待抉择 UI 渲染后点击选项
                 Thread.sleep((500..800).random().toLong())
-                c.action.chooseOne(chosenIndex)
+                chooseOneFixed(chosenIndex)
             } catch (e: InterruptedException) {
                 log.warn { "抉择被中断: $cardLabel" }
                 Thread.currentThread().interrupt()
@@ -1179,6 +1179,28 @@ class TokenDruidDeck : DeckStrategy() {
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * 抉择选项点击（反射绕过核心JAR的execChooseOne中lClick()右击取消问题）
+     */
+    @Suppress("UNCHECKED_CAST")
+    private fun chooseOneFixed(index: Int): Boolean {
+        return try {
+            val gameUtilClass = Class.forName("club.xiaojiawei.hsscript.utils.GameUtil")
+            val instanceField = gameUtilClass.getDeclaredField("INSTANCE")
+            val instance = instanceField.get(null)
+            val rect = gameUtilClass.getMethod("getChooseOneCardRect", Int::class.java).invoke(instance, index)
+            val rectClass = rect.javaClass
+            val valid = rectClass.getMethod("isValid").invoke(rect) as Boolean
+            if (valid) {
+                rectClass.getMethod("lClick", java.lang.Boolean.TYPE).invoke(rect, false)
+                true
+            } else false
+        } catch (e: Exception) {
+            log.warn { "chooseOneFixed反射失败: ${e.message}" }
+            false
         }
     }
 
