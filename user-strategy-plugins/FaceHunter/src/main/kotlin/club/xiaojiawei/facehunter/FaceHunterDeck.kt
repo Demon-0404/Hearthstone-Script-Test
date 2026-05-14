@@ -49,6 +49,8 @@ private data class KnownCardInfo(
     val needsTargeting: Boolean = false,        // 需要手动指向
     val targetsEnemy: Boolean = false,          // 指向敌方
     val triggersTimeline: Boolean = false,      // 触发时间线选择
+    val isChooseOne: Boolean = false,          // 抉择牌
+    val chooseOneIndex: Int = 0,               // 抉择默认选项(0或1)
     val needsSpace: Int? = null,               // 需要的格子数
 )
 
@@ -335,8 +337,17 @@ class FaceHunterDeck : DeckStrategy() {
                     }
                     playCardWithTargeting(c, me, rival)
                     used += c.actualCost(me, enemyMinions)
-                    Thread.sleep(if (firstAction) (100..180).random().toLong() else (80..150).random().toLong())
+                    // 发现/过牌后等更久（发现UI需要时间选择）
+                    val waitMs = if (known?.isDraw == true) (1200..2000).random().toLong()
+                        else if (firstAction) (100..180).random().toLong()
+                        else (80..150).random().toLong()
+                    Thread.sleep(waitMs)
                     firstAction = false
+                    // 打出时间线触发牌后停止继续出牌（等时间线选择）
+                    if (known?.triggersTimeline == true) {
+                        log.info { "打出时间线牌，停止后续出牌" }
+                        break
+                    }
                 }
             }
             log.info { "DP消耗${used}费 剩${me.usableResource}费" }
@@ -429,6 +440,14 @@ class FaceHunterDeck : DeckStrategy() {
                 c.action.launch()
                 Thread.sleep((80..150).random().toLong())
             }
+        }
+
+        // 12. 回合结束防呆检查：随从未攻击→打脸、英雄技能可用→射箭
+        safetyNetAttacks(me, rival)
+        if (!heroPowerUsed && heroPower != null && me.usableResource >= heroPower.cost) {
+            log.info { "防呆英雄技能(稳固射击-回合结束)" }
+            heroPower.action.power()
+            Thread.sleep((100..200).random().toLong())
         }
     }
 
@@ -563,15 +582,20 @@ class FaceHunterDeck : DeckStrategy() {
             }
         }
 
-        // 重放1费牌（CATA_560）：价值随已打出的1费牌数量增长
+        // 重放1费牌（CATA_560）：价值随已打出+手牌中可打的1费牌数量增长
         if (known?.isReplay1Cost == true) {
             val grave = WAR.me.graveyardArea
             val played1CostCount = grave?.cards?.count { it.cost == 1 && it.cardType == CardTypeEnum.MINION } ?: 0
                 + (grave?.cards?.count { it.cost == 1 && it.cardType == CardTypeEnum.SPELL } ?: 0)
-            v += played1CostCount * 1.5  // 每张打过的1费牌+1.5
-            if (played1CostCount >= 4) v += 3.0  // 大量1费=超高价值
-            else if (played1CostCount >= 2) v += 1.0
-            if (played1CostCount < 2) v -= 3.0  // 几乎没打1费牌时价值低
+            // 手牌中可打出的1费牌（托维尔前先投资）
+            val hand1CostPlayable = WAR.me.handArea.cards.count {
+                it.cost == 1 && it.cardId != c.cardId && it.actualCost(WAR.me, enemies) <= mana
+            }
+            val total1Cost = played1CostCount + hand1CostPlayable
+            v += total1Cost * 1.5  // 每张1费牌+1.5
+            if (total1Cost >= 4) v += 3.0
+            else if (total1Cost >= 2) v += 1.0
+            if (played1CostCount < 2 && hand1CostPlayable < 1) v -= 3.0
         }
 
         // 给石头（TLC_427）：1费打3石头=直伤价值
@@ -754,8 +778,13 @@ class FaceHunterDeck : DeckStrategy() {
 
         val score = scoreBoard(me, myMinionCount, myAtk, enemyMinions)
         val threshold = if (myAtk >= 8) 0.35 else 0.55
-        log.info { "时间线评分=${"%.2f".format(score)} 阈值=$threshold 场攻$myAtk → ${if (score >= threshold) "维持" else "回溯"}" }
-        if (score >= threshold) timeLineEvent.keep() else timeLineEvent.rewind()
+        val shouldKeep = score >= threshold
+        log.info { "时间线评分=${"%.2f".format(score)} 阈值=$threshold 场攻$myAtk → ${if (shouldKeep) "维持" else "回溯"}" }
+        // 反射直接点击时间线按钮（绕过GameUtil.keepTimeline()/rewindTimeline()的lClick(true)取消bug）
+        if (!timelineClickFixed(shouldKeep)) {
+            // 反射失败兜底：标准SDK路径
+            if (shouldKeep) timeLineEvent.keep() else timeLineEvent.rewind()
+        }
     }
 
     private fun scoreBoard(me: Player, myMinionCount: Int, myAtk: Int, enemyMinions: List<Card>): Double {
@@ -813,6 +842,15 @@ class FaceHunterDeck : DeckStrategy() {
             }
         }
 
+        // 抉择牌：先打出触发抉择UI，反射点击选项（绕过SDK的lClick(true)取消bug）
+        if (known?.isChooseOne == true) {
+            log.info { "抉择牌: ${c.entityName.ifEmpty { c.cardId }} 选[${known.chooseOneIndex}]" }
+            safePower(c)
+            Thread.sleep((500..800).random().toLong())
+            chooseOneFixed(known.chooseOneIndex)
+            return
+        }
+
         // 普通出牌
         c.action.autoPower(cardInfo)
     }
@@ -862,6 +900,89 @@ class FaceHunterDeck : DeckStrategy() {
                     }
                 }
             }
+        }
+    }
+
+    // ==================== 抉择/回溯牌反射点击（绕过SDK的lClick(true)取消bug） ====================
+
+    @Suppress("UNCHECKED_CAST")
+    private fun chooseOneFixed(index: Int): Boolean {
+        return try {
+            val gameUtilClass = Class.forName("club.xiaojiawei.hsscript.utils.GameUtil")
+            val instanceField = gameUtilClass.getDeclaredField("INSTANCE")
+            val instance = instanceField.get(null)
+            val rect = gameUtilClass.getMethod("getChooseOneCardRect", Int::class.java).invoke(instance, index)
+            val rectClass = rect.javaClass
+            val valid = rectClass.getMethod("isValid").invoke(rect) as Boolean
+            if (valid) {
+                rectClass.getMethod("lClick", java.lang.Boolean.TYPE).invoke(rect, false)
+                true
+            } else false
+        } catch (e: Exception) {
+            log.warn { "chooseOneFixed反射失败: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * 直接点击时间线按钮（维持/回溯），绕过GameUtil.keepTimeline()/rewindTimeline()的lClick(true)取消问题
+     * @param keep true=维持时间线[1], false=回溯时间线[0]
+     */
+    private fun timelineClickFixed(keep: Boolean): Boolean {
+        return try {
+            val gameUtilClass = Class.forName("club.xiaojiawei.hsscript.utils.GameUtil")
+            val instanceField = gameUtilClass.getDeclaredField("INSTANCE")
+            val instance = instanceField.get(null)
+            val rectsField = gameUtilClass.getDeclaredField("TIMELINE_RECTS")
+            rectsField.isAccessible = true
+            val rects = rectsField.get(instance) as Array<*>
+            val index = if (keep) 1 else 0  // [0]=回溯, [1]=维持
+            val rect = rects[index] ?: return false
+            val rectClass = rect.javaClass
+            val valid = rectClass.getMethod("isValid").invoke(rect) as Boolean
+            if (valid) {
+                rectClass.getMethod("lClick", java.lang.Boolean.TYPE).invoke(rect, false)
+                true
+            } else false
+        } catch (e: Exception) {
+            log.warn { "timelineClickFixed反射失败: ${e.message}" }
+            false
+        }
+    }
+
+    // ==================== 防呆机制 ====================
+
+    /**
+     * 兜底攻击：遍历所有未攻击随从打脸（防随从攻击伏笔）
+     */
+    private fun safetyNetAttacks(me: Player, rival: Player) {
+        val unchecked = me.playArea.cards.filter {
+            it.cardType == CardTypeEnum.MINION && it.atc > 0 && !it.isExhausted
+        }
+        if (unchecked.isEmpty()) return
+        val hasTaunt = rival.playArea.cards.any {
+            it.cardType == CardTypeEnum.MINION && it.isEnemyTauntLike()
+        }
+        if (hasTaunt) return  // 有嘲讽时不强制打脸
+        val rivalHero = rival.playArea.hero ?: return
+        for (m in unchecked.sortedByDescending { it.atc }) {
+            if (!m.isExhausted && m.atc > 0) {
+                log.info { "防呆打脸: ${m.entityName}(${m.atc}/${m.health})→敌方英雄" }
+                m.action.attack(rivalHero)
+                Thread.sleep((80..150).random().toLong())
+            }
+        }
+    }
+
+    /**
+     * 卡牌打出防呆：power()返回null时重试一次，再失败则autoPower兜底
+     */
+    private fun safePower(c: Card, target: Card? = null) {
+        val result = if (target != null) c.action.power(target) else c.action.power()
+        if (result == null) {
+            log.warn { "卡牌打出失败，重试: ${c.entityName.ifEmpty { c.cardId }}" }
+            Thread.sleep((300..500).random().toLong())
+            if (target != null) c.action.power(target) else c.action.power()
         }
     }
 
